@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# FireDev command line. Uses the project's virtualenv (create it with tools/setup.sh).
+here="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+PYTHONPATH="$here/backend${PYTHONPATH:+:$PYTHONPATH}" exec "$here/.venv/bin/python" -m firedev "$@"

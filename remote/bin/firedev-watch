@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# firedev-watch <queue_dir>: prints the id of each new agent request as it arrives, claiming it by renaming
+# <id>.req to <id>.taken so it is handled exactly once. Requests claimed before a disconnect but never
+# answered are printed again at start-up.
+set -u
+q=$1
+mkdir -p "$q"
+for f in "$q"/*.taken; do
+  [ -e "$f" ] || continue
+  id=${f##*/}; id=${id%.taken}
+  if [ ! -f "$q/$id.state" ] || grep -q '^waiting' "$q/$id.state"; then echo "$id"; fi
+done
+while :; do
+  for f in "$q"/*.req; do
+    [ -e "$f" ] || continue
+    id=${f##*/}; id=${id%.req}
+    mv "$f" "$q/$id.taken" 2>/dev/null && echo "$id"
+  done
+  sleep 0.3
+done

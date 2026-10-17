@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# firedev-follow <run_dir> <offset>: streams <run_dir>/out.log from byte <offset> until the run has finished
+# and everything has been printed. FireDev resumes from its own offset after a reconnect.
+set -u
+dir=$1
+offset=${2:-0}
+log="$dir/out.log"
+while :; do
+  size=0
+  [ -f "$log" ] && size=$(wc -c < "$log")
+  if [ "$size" -gt "$offset" ]; then
+    tail -c +$((offset + 1)) "$log" | head -c $((size - offset))
+    offset=$size
+    continue
+  fi
+  [ -f "$dir/exit_code" ] && exit 0
+  # The run's tmux window is gone but it never wrote an exit code: it was killed.
+  if [ -f "$dir/window" ] && read -r session window < "$dir/window" \
+     && ! tmux list-windows -t "$session" -F '#{window_name}' 2>/dev/null | grep -qxF "$window"; then
+    sleep 0.5
+    [ -f "$dir/exit_code" ] || echo 137 > "$dir/exit_code"
+    exit 0
+  fi
+  sleep 0.2
+done

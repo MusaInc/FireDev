@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Stand-in for `codex exec --json` in the integration tests: the same JSONL events, scripted behaviour.
+# The prompt decides what happens: SLOW (long turn), PUSH (asks FireDev to approve a git push), otherwise
+# a fix: read a file, run the tests through `firedev run test`, edit the file, run them again.
+if [ "${1:-}" = "--version" ]; then echo "codex-cli 0.0.0-fake"; exit 0; fi
+prompt=$(cat)
+j() { python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"; }
+say() { echo "{\"type\":\"item.completed\",\"item\":{\"id\":\"$1\",\"type\":\"agent_message\",\"text\":$(j "$2")}}"; }
+cmd() { # id command
+  echo "{\"type\":\"item.started\",\"item\":{\"id\":\"$1\",\"type\":\"command_execution\",\"command\":$(j "$2"),\"aggregated_output\":\"\",\"exit_code\":null,\"status\":\"in_progress\"}}"
+  out=$(bash -c "$2" 2>&1); code=$?
+  echo "{\"type\":\"item.completed\",\"item\":{\"id\":\"$1\",\"type\":\"command_execution\",\"command\":$(j "$2"),\"aggregated_output\":$(j "$out"),\"exit_code\":$code,\"status\":\"completed\"}}"
+  LAST_OUT=$out; LAST_CODE=$code
+}
+echo '{"type":"thread.started","thread_id":"fake-thread-1"}'
+echo '{"type":"turn.started"}'
+case "$prompt" in
+  *SLOW*)
+    say i0 "Working slowly."
+    for i in $(seq 1 60); do sleep 0.5; done
+    say i1 "Done slowly." ;;
+  *PUSH*)
+    say i0 "I'll publish the branch."
+    cmd i1 "firedev request --reason 'Publish the fix' -- git push origin main"
+    say i2 "Push exit $LAST_CODE: $(echo "$LAST_OUT" | tail -1)" ;;
+  *)
+    say i0 "I'll check the app file and run the tests."
+    cmd i1 "cat src/app.txt"
+    cmd i2 "firedev run test"
+    echo "fixed" > src/app.txt
+    echo "{\"type\":\"item.completed\",\"item\":{\"id\":\"i3\",\"type\":\"file_change\",\"changes\":[{\"path\":\"$PWD/src/app.txt\",\"kind\":\"update\"}],\"status\":\"completed\"}}"
+    cmd i4 "firedev run test"
+    say i5 "Fixed the app file. Tests pass." ;;
+esac
+echo '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}'

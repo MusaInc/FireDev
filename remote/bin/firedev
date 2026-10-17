@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# FireDev helper for coding agents running inside a sandbox on this machine.
+#
+#   firedev actions                                   list the project's actions
+#   firedev run <action>                              run a declared action (tests, build, ...)
+#   firedev request --reason "<why>" -- <command...>  ask the user to approve a command on the TV
+#
+# The helper never runs anything itself. It drops a request into the project's FireDev queue; the FireDev
+# service picks it up, checks the risk level itself, asks for approval on the TV when needed, runs the
+# command outside the sandbox, and this helper streams the output back and exits with the command's code.
+set -u
+
+QUEUE="${FIREDEV_QUEUE:-}"
+STATE_DIR="${FIREDEV_STATE:-$HOME/.firedev/projects/${FIREDEV_PROJECT:-unknown}}"
+WAIT_SECONDS="${FIREDEV_WAIT_SECONDS:-1800}"
+
+die() { echo "firedev: $*" >&2; exit 2; }
+
+json_escape() {
+  local s=$1
+  s=${s//\\/\\\\}; s=${s//\"/\\\"}; s=${s//$'\n'/\\n}; s=${s//$'\r'/}; s=${s//$'\t'/\\t}
+  printf '%s' "$s"
+}
+
+usage() { sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+
+[ $# -ge 1 ] || usage
+cmd=$1; shift
+
+case "$cmd" in
+  actions)
+    if [ -f "$STATE_DIR/actions.txt" ]; then cat "$STATE_DIR/actions.txt"; else echo "No actions are configured for this project."; fi
+    exit 0 ;;
+  run)
+    [ $# -ge 1 ] || die "usage: firedev run <action>"
+    type=action; action=$1; command=""; reason="" ;;
+  request)
+    reason=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --reason) reason=${2:-}; shift 2 ;;
+        --reason=*) reason=${1#--reason=}; shift ;;
+        --) shift; break ;;
+        *) break ;;
+      esac
+    done
+    [ $# -ge 1 ] || die 'usage: firedev request --reason "<why>" -- <command...>'
+    [ -n "$reason" ] || die "say why with --reason; the user reads it on the TV"
+    type=command; action=""; command="$*" ;;
+  -h|--help|help) usage ;;
+  *) die "unknown command '$cmd' (try: firedev actions)" ;;
+esac
+
+[ -n "$QUEUE" ] || die "FIREDEV_QUEUE is not set; run this from a FireDev agent session"
+mkdir -p "$QUEUE" || die "cannot write to $QUEUE"
+
+id="r$(date +%s)$RANDOM$RANDOM"
+tmp="$QUEUE/.$id.tmp"
+printf '{"id":"%s","type":"%s","action":"%s","command":"%s","reason":"%s","cwd":"%s"}\n' \
+  "$id" "$type" "$(json_escape "$action")" "$(json_escape "$command")" "$(json_escape "$reason")" "$(json_escape "$PWD")" > "$tmp"
+mv "$tmp" "$QUEUE/$id.req"
+
+state_file="$QUEUE/$id.state"
+announced=""
+deadline=$(( $(date +%s) + WAIT_SECONDS ))
+run_dir=""
+while :; do
+  if [ -f "$state_file" ]; then
+    read -r state rest < "$state_file" || true
+    case "$state" in
+      waiting)
+        if [ -z "$announced" ]; then echo "Waiting for the user to approve this on the TV…"; announced=1; fi ;;
+      running) run_dir=$rest; break ;;
+      rejected) echo "Rejected on the TV: ${rest:-the user said no}. Do not retry this; tell the user what you would have done instead."; exit 3 ;;
+      error) echo "FireDev could not run this: $rest"; exit 4 ;;
+    esac
+  fi
+  if [ "$(date +%s)" -ge "$deadline" ]; then echo "No decision from the TV in time; the request has expired."; exit 4; fi
+  sleep 0.3
+done
+
+# Stream the run's output until it finishes, then exit with its code.
+log="$run_dir/out.log"
+offset=0
+while :; do
+  if [ -f "$log" ]; then
+    size=$(wc -c < "$log")
+    if [ "$size" -gt "$offset" ]; then
+      tail -c +$((offset + 1)) "$log" | head -c $((size - offset))
+      offset=$size
+    fi
+  fi
+  if [ -f "$run_dir/exit_code" ]; then
+    size=$(wc -c < "$log" 2>/dev/null || echo 0)
+    [ "$size" -gt "$offset" ] && continue
+    code=$(cat "$run_dir/exit_code")
+    exit "${code:-1}"
+  fi
+  sleep 0.3
+done

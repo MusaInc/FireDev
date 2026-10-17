@@ -1,0 +1,196 @@
+"""FireDev configuration: machines you can SSH into and the projects that live on them.
+
+The file is YAML (default ~/.config/firedev/firedev.yaml, or $FIREDEV_CONFIG). Secrets never live in
+it: SSH keys are referenced by path, and a password, if you must use one, is read from an environment
+variable named in the config.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import yaml
+
+DEFAULT_CONFIG = Path(os.environ.get("FIREDEV_CONFIG", "~/.config/firedev/firedev.yaml")).expanduser()
+DEFAULT_HOME = Path(os.environ.get("FIREDEV_HOME", "~/.config/firedev")).expanduser()
+
+ACTION_KINDS = {"tests", "build", "deploy", "logs", "command"}
+AGENTS = {"codex", "claude", "shell"}
+AUTH_METHODS = {"key", "agent", "password"}
+_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,40}$")
+
+
+class ConfigError(ValueError):
+    pass
+
+
+@dataclass
+class Machine:
+    id: str
+    host: str
+    user: str
+    port: int = 22
+    auth: str = "key"
+    key_file: str | None = None
+    password_env: str | None = None
+    known_hosts: str | None = "~/.ssh/known_hosts"
+    label: str | None = None
+
+    @property
+    def display(self) -> str:
+        return self.label or self.id
+
+
+@dataclass
+class Action:
+    """A project command FireDev itself runs (outside the agent's sandbox), with a declared risk level."""
+
+    id: str
+    run: str
+    title: str
+    kind: str = "command"
+    level: int = 0
+    reason: str | None = None
+    risk: str | None = None
+    reports: str | None = None  # glob of JUnit XML files written by a test run
+    artifact: str | None = None  # path of the build output to report
+
+
+@dataclass
+class Project:
+    id: str
+    name: str
+    machine: Machine
+    path: str
+    agent: str = "codex"
+    tmux_session: str = ""
+    startup: str | None = None
+    description: str | None = None
+    aliases: list[str] = field(default_factory=list)
+    actions: dict[str, Action] = field(default_factory=dict)
+    agent_options: dict = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.tmux_session:
+            self.tmux_session = f"firedev-{self.id}"
+
+
+@dataclass
+class Settings:
+    host: str = "127.0.0.1"
+    port: int = 8130
+    data_dir: Path = DEFAULT_HOME / "data"
+    public_url: str | None = None
+    # Which non-TV clients may approve. "tv" means approvals only ever come from a paired TV remote.
+    remote_approval: str = "tv"
+
+
+@dataclass
+class Config:
+    settings: Settings
+    machines: dict[str, Machine]
+    projects: dict[str, Project]
+    path: Path | None = None
+
+
+def _require(d: dict, key: str, where: str):
+    if key not in d or d[key] in (None, ""):
+        raise ConfigError(f"{where}: '{key}' is required")
+    return d[key]
+
+
+def parse(raw: dict, path: Path | None = None) -> Config:
+    raw = raw or {}
+    s = raw.get("server") or {}
+    settings = Settings(
+        host=str(s.get("host", "127.0.0.1")),
+        port=int(s.get("port", 8130)),
+        data_dir=Path(str(s.get("data_dir", DEFAULT_HOME / "data"))).expanduser(),
+        public_url=s.get("public_url"),
+        remote_approval=str(s.get("remote_approval", "tv")),
+    )
+    if settings.remote_approval not in {"tv", "level2"}:
+        raise ConfigError("server.remote_approval must be 'tv' or 'level2'")
+
+    machines: dict[str, Machine] = {}
+    for mid, m in (raw.get("machines") or {}).items():
+        where = f"machines.{mid}"
+        auth = str(m.get("auth", "key"))
+        if auth not in AUTH_METHODS:
+            raise ConfigError(f"{where}: auth must be one of {sorted(AUTH_METHODS)}")
+        if auth == "password" and not m.get("password_env"):
+            raise ConfigError(f"{where}: password auth reads the password from an environment variable; set password_env")
+        if "password" in m:
+            raise ConfigError(f"{where}: don't put passwords in the config file; use password_env or an SSH key")
+        machines[mid] = Machine(
+            id=mid,
+            host=str(_require(m, "host", where)),
+            user=str(_require(m, "user", where)),
+            port=int(m.get("port", 22)),
+            auth=auth,
+            key_file=m.get("key_file"),
+            password_env=m.get("password_env"),
+            known_hosts=m.get("known_hosts", "~/.ssh/known_hosts"),
+            label=m.get("label"),
+        )
+
+    projects: dict[str, Project] = {}
+    for i, p in enumerate(raw.get("projects") or []):
+        where = f"projects[{i}]"
+        pid = str(_require(p, "id", where))
+        if not _ID.match(pid):
+            raise ConfigError(f"{where}: id must be lowercase letters, digits and dashes")
+        if pid in projects:
+            raise ConfigError(f"{where}: duplicate project id '{pid}'")
+        mid = str(_require(p, "machine", where))
+        if mid not in machines:
+            raise ConfigError(f"{where}: unknown machine '{mid}'")
+        agent = str(p.get("agent", "codex"))
+        if agent not in AGENTS:
+            raise ConfigError(f"{where}: agent must be one of {sorted(AGENTS)}")
+        actions = {}
+        for aid, a in (p.get("actions") or {}).items():
+            if isinstance(a, str):
+                a = {"run": a}
+            kind = str(a.get("kind", "command"))
+            if kind not in ACTION_KINDS:
+                raise ConfigError(f"{where}.actions.{aid}: kind must be one of {sorted(ACTION_KINDS)}")
+            level = int(a.get("level", 0))
+            if level not in (0, 1, 2, 3):
+                raise ConfigError(f"{where}.actions.{aid}: level must be 0-3")
+            actions[aid] = Action(
+                id=aid,
+                run=str(_require(a, "run", f"{where}.actions.{aid}")),
+                title=str(a.get("title") or aid.replace("_", " ").capitalize()),
+                kind=kind,
+                level=level,
+                reason=a.get("reason"),
+                risk=a.get("risk"),
+                reports=a.get("reports"),
+                artifact=a.get("artifact"),
+            )
+        projects[pid] = Project(
+            id=pid,
+            name=str(_require(p, "name", where)),
+            machine=machines[mid],
+            path=str(_require(p, "path", where)),
+            agent=agent,
+            tmux_session=str(p.get("tmux_session") or ""),
+            startup=p.get("startup"),
+            description=p.get("description"),
+            aliases=[str(x).lower() for x in p.get("aliases") or []],
+            actions=actions,
+            agent_options=dict(p.get("agent_options") or {}),
+        )
+    return Config(settings=settings, machines=machines, projects=projects, path=path)
+
+
+def load(path: Path | str | None = None) -> Config:
+    path = Path(path).expanduser() if path else DEFAULT_CONFIG
+    if not path.exists():
+        raise ConfigError(f"No config at {path}. Copy config/firedev.example.yaml there and edit it.")
+    with path.open() as f:
+        return parse(yaml.safe_load(f), path)

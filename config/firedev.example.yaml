@@ -1,0 +1,56 @@
+# FireDev configuration. Copy to ~/.config/firedev/firedev.yaml (or set FIREDEV_CONFIG) and edit.
+# No secrets in here: SSH keys are referenced by path; a password (not recommended) is read from an env var.
+
+server:
+  host: 127.0.0.1          # 0.0.0.0 to let a Fire TV on your network connect directly
+  port: 8130
+  # public_url: https://firedev.example.com   # used for the phone-microphone link and QR code
+  # remote_approval: tv    # "tv" (default): only the TV remote can approve. "level2": assistants may approve level 2.
+
+machines:
+  dev-server:
+    label: dev-server       # name shown on the TV
+    host: 203.0.113.10
+    port: 22
+    user: alex
+    auth: key               # key | agent | password
+    key_file: ~/.config/firedev/keys/firedev_ed25519
+    known_hosts: ~/.ssh/known_hosts
+    # auth: password
+    # password_env: FIREDEV_DEV_SERVER_PASSWORD
+
+projects:
+  - id: pulse
+    name: My Android App
+    description: Pulse focus tracker
+    aliases: [android, pulse, android project]
+    machine: dev-server
+    path: ~/firedev-demo/pulse
+    agent: codex            # codex | claude | shell
+    tmux_session: firedev-pulse
+    # startup: source .envrc          # run once in the tmux "shell" window when the session is created
+    agent_options:
+      writable_roots: [~/.gradle, ~/.android, ~/.kotlin]   # extra folders the agent's sandbox may write
+      # model: gpt-5-codex
+    actions:
+      test:
+        title: Run the tests
+        kind: tests
+        run: ./gradlew --offline testDebugUnitTest
+        reports: app/build/test-results/testDebugUnitTest/*.xml
+      build:
+        title: Build the Android app
+        kind: build
+        run: ./gradlew --offline assembleDebug
+        artifact: app/build/outputs/apk/debug/app-debug.apk
+      deploy_preview:
+        title: Deploy the preview
+        kind: deploy
+        level: 2
+        run: ./scripts/deploy-preview.sh
+        reason: Publish the latest build to the preview server so testers get it.
+        risk: Replaces the build testers are using. The preview server restarts for a few seconds.
+      logs:
+        title: Check the logs
+        kind: logs
+        run: tail -n 40 ~/firedev-demo/preview/server.log 2>/dev/null || echo "No preview logs yet"
