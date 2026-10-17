@@ -1,16 +1,24 @@
 #!/usr/bin/env bash
 # firedev-watch <queue_dir>: prints the id of each new agent request as it arrives, claiming it by renaming
-# <id>.req to <id>.taken so it is handled exactly once. Requests claimed before a disconnect but never
-# answered are printed again at start-up.
+# <id>.req to <id>.taken so it is handled exactly once. Requests claimed earlier but never answered are printed
+# again at start-up. Exits as soon as the FireDev connection that started it is gone, and only one watcher runs
+# per queue, so a dropped connection can never leave a watcher behind that swallows requests.
 set -u
 q=$1
+parent=$PPID
 mkdir -p "$q"
+alive() { kill -0 "$parent" 2>/dev/null && [ "$(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ')" != "1" ]; }
+if command -v flock >/dev/null 2>&1; then
+  exec 9>"$q/.watch.lock"
+  # A watcher from a connection that just dropped exits within a second; wait for it rather than racing it.
+  until flock -n 9; do alive || exit 0; sleep 0.3; done
+fi
 for f in "$q"/*.taken; do
   [ -e "$f" ] || continue
   id=${f##*/}; id=${id%.taken}
   if [ ! -f "$q/$id.state" ] || grep -q '^waiting' "$q/$id.state"; then echo "$id"; fi
 done
-while :; do
+while alive; do
   for f in "$q"/*.req; do
     [ -e "$f" ] || continue
     id=${f##*/}; id=${id%.req}

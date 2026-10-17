@@ -31,7 +31,9 @@ projects:
     # startup: source .envrc          # run once in the tmux "shell" window when the session is created
     agent_options:
       writable_roots: [~/.gradle, ~/.android, ~/.kotlin]   # extra folders the agent's sandbox may write
+      # binary: /usr/local/bin/codex   # if `codex` on the login-shell PATH isn't the one you want
       # model: gpt-5-codex
+      # reasoning_effort: medium        # faster turns for demos
     actions:
       test:
         title: Run the tests

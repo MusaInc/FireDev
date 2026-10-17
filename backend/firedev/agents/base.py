@@ -52,12 +52,13 @@ class AgentAdapter(ABC):
     def new_parser(self) -> "TurnParser":
         ...
 
-    def compose_prompt(self, task: str, context: str | None = None, first_turn: bool = True) -> str:
-        parts = [FIREDEV_BRIEF] if first_turn else ["(FireDev rules from the start of this conversation still apply.)"]
+    def compose_prompt(self, task: str, context: str | None = None, first_turn: bool = True, tool: str = "firedev") -> str:
+        """tool is the absolute path of the FireDev helper: sandboxed login shells don't keep FireDev's PATH."""
+        parts = [FIREDEV_BRIEF] if first_turn else [f"(FireDev rules from the start of this conversation still apply. The helper is `{tool}`.)"]
         if context:
             parts.append(f"Context from FireDev:\n{context}")
         parts.append(f"The user's request:\n{task}")
-        return "\n\n".join(parts)
+        return "\n\n".join(parts).replace("`firedev ", f"`{tool} ")
 
     def expand(self, path: str, home: str) -> str:
         return home + path[1:] if path.startswith("~") else path

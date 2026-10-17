@@ -16,7 +16,7 @@ class ShellAdapter(AgentAdapter):
     def check_command(self) -> str:
         return "bash --version | head -1"
 
-    def compose_prompt(self, task: str, context: str | None = None, first_turn: bool = True) -> str:
+    def compose_prompt(self, task: str, context: str | None = None, first_turn: bool = True, tool: str = "firedev") -> str:
         return task
 
     def turn_command(self, prompt_file: str, thread_id: str | None, cwd: str, home: str) -> str:

@@ -50,7 +50,8 @@ def test_ask_codex_prefix_and_free_text():
 
 def test_approve_only_when_something_is_pending():
     assert parse("Approve", PROJECTS, {**CTX, "pending_approval": True}).name == "approve_action"
-    assert parse("Approve", PROJECTS, CTX).name == "send_agent_task"
+    nothing = parse("Approve", PROJECTS, CTX)
+    assert nothing.name == "help" and nothing.title == "Nothing is waiting for your approval"
 
 
 def test_voice_never_becomes_a_shell_command():

@@ -1,0 +1,194 @@
+{
+  "interactionModel": {
+    "languageModel": {
+      "invocationName": "fire dev",
+      "intents": [
+        {
+          "name": "AMAZON.CancelIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.HelpIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.StopIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.NavigateHomeIntent",
+          "samples": []
+        },
+        {
+          "name": "OpenProjectIntent",
+          "samples": [
+            "open {project}",
+            "open my {project}",
+            "open my {project} project",
+            "switch to {project}",
+            "connect to {project}"
+          ],
+          "slots": [
+            {
+              "name": "project",
+              "type": "PROJECT_NAME"
+            }
+          ]
+        },
+        {
+          "name": "WhyBuildFailingIntent",
+          "samples": [
+            "why is the build failing",
+            "why did the build fail",
+            "what's wrong with the build",
+            "why is it broken"
+          ]
+        },
+        {
+          "name": "FixAndTestIntent",
+          "samples": [
+            "fix it and run the tests",
+            "fix the build",
+            "fix it",
+            "fix the failing tests"
+          ]
+        },
+        {
+          "name": "RunTestsIntent",
+          "samples": [
+            "run the tests",
+            "run tests",
+            "test the app",
+            "run the unit tests"
+          ]
+        },
+        {
+          "name": "BuildAppIntent",
+          "samples": [
+            "build the app",
+            "build the android app",
+            "make a build",
+            "rebuild the app"
+          ]
+        },
+        {
+          "name": "DeployPreviewIntent",
+          "samples": [
+            "deploy the preview",
+            "deploy to preview",
+            "ship the preview",
+            "deploy the latest build"
+          ]
+        },
+        {
+          "name": "CheckLogsIntent",
+          "samples": [
+            "check the logs",
+            "show the logs",
+            "read the logs"
+          ]
+        },
+        {
+          "name": "ShowChangesIntent",
+          "samples": [
+            "show me what changed",
+            "what changed",
+            "show the changes",
+            "show the diff"
+          ]
+        },
+        {
+          "name": "UndoIntent",
+          "samples": [
+            "undo that change",
+            "undo the last change",
+            "revert that"
+          ]
+        },
+        {
+          "name": "StatusIntent",
+          "samples": [
+            "what's the status",
+            "what are you doing",
+            "how is it going",
+            "what is codex doing"
+          ]
+        },
+        {
+          "name": "StopTaskIntent",
+          "samples": [
+            "stop the task",
+            "stop working",
+            "cancel the task"
+          ]
+        },
+        {
+          "name": "ContinueTaskIntent",
+          "samples": [
+            "continue",
+            "keep going",
+            "carry on"
+          ]
+        },
+        {
+          "name": "ApproveIntent",
+          "samples": [
+            "approve",
+            "approve it",
+            "go ahead"
+          ]
+        },
+        {
+          "name": "RejectIntent",
+          "samples": [
+            "reject",
+            "reject it",
+            "don't do it"
+          ]
+        },
+        {
+          "name": "AgentTaskIntent",
+          "samples": [
+            "ask codex to {request}",
+            "tell codex to {request}",
+            "ask the agent to {request}",
+            "tell the agent to {request}",
+            "ask claude to {request}"
+          ],
+          "slots": [
+            {
+              "name": "request",
+              "type": "AMAZON.SearchQuery"
+            }
+          ]
+        }
+      ],
+      "types": [
+        {
+          "name": "PROJECT_NAME",
+          "values": [
+            {
+              "name": {
+                "value": "android project",
+                "synonyms": [
+                  "android app",
+                  "my android app",
+                  "pulse"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "web app",
+                "synonyms": [
+                  "website",
+                  "site"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

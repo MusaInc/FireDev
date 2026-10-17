@@ -292,7 +292,7 @@ class FireDev:
 
     def _context(self, pid: str | None) -> dict:
         if not pid or pid not in self.sessions:
-            return {"project": None}
+            return {"project": None, "pending_approval": bool(self.approvals)}
         s = self.sessions[pid]
         return {"project": pid, "agent": s.adapter.display,
                 "actions": {a.id: {"kind": a.kind, "title": a.title} for a in s.project.actions.values()},

@@ -77,5 +77,6 @@ class CodexParser(TurnParser):
         if it == "todo_list":
             return [{"kind": "plan", "items": [{"text": x.get("text", ""), "done": bool(x.get("completed"))} for x in item.get("items") or []]}]
         if it == "error" and done:
-            return [{"kind": "error", "message": item.get("message", "")}]
+            # Item-level errors are warnings (e.g. unknown model metadata); the turn carries on.
+            return [{"kind": "thinking", "item_id": iid, "text": item.get("message", "")}]
         return []

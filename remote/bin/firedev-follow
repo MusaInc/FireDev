@@ -5,7 +5,9 @@ set -u
 dir=$1
 offset=${2:-0}
 log="$dir/out.log"
-while :; do
+parent=$PPID
+alive() { kill -0 "$parent" 2>/dev/null && [ "$(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ')" != "1" ]; }
+while alive; do
   size=0
   [ -f "$log" ] && size=$(wc -c < "$log")
   if [ "$size" -gt "$offset" ]; then

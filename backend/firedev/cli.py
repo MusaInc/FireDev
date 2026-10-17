@@ -35,7 +35,10 @@ def _base_url(c: cfg.Config) -> str:
 
 
 def _admin_token() -> str:
-    return (cfg.DEFAULT_HOME / "admin.token").read_text().strip()
+    path = cfg.DEFAULT_HOME / "admin.token"
+    if not path.exists():
+        sys.exit("firedev: no admin token yet. Start the service once with `firedev serve`.")
+    return path.read_text().strip()
 
 
 def _call(c: cfg.Config, method: str, path: str, body: dict | None = None, token: str | None = None) -> dict:
@@ -122,6 +125,10 @@ def cmd_demo(args, c):
         pid = (DEMO_DIR / "preview" / "server.pid").read_text().strip()
         subprocess.run(["kill", pid], capture_output=True)
         shutil.rmtree(DEMO_DIR / "preview", ignore_errors=True)
+    if args.action == "reset":
+        # Stop anything still running for the demo (agent turns, builds) so the next take starts clean.
+        session = c.projects[args.project].tmux_session if args.project in c.projects else f"firedev-{args.project}"
+        subprocess.run(["tmux", "kill-session", "-t", f"={session}"], capture_output=True)
     if target.exists():
         if args.action == "setup":
             sys.exit(f"{target} already exists. Use `firedev demo reset` to start it again from the broken state.")

@@ -1,0 +1,16 @@
+{
+  "name": "firedev-tv",
+  "private": true,
+  "version": "0.1.0",
+  "description": "FireDev TV interface (WebView app inside the Fire TV shell) and its browser tests",
+  "scripts": {
+    "build": "node tools/build-web.mjs",
+    "watch": "node tools/build-web.mjs --watch",
+    "test:e2e": "playwright test --config e2e/playwright.config.mjs",
+    "screens": "node tools/capture-screens.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.23.1",
+    "@playwright/test": "1.55.0"
+  }
+}

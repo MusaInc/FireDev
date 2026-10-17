@@ -1,0 +1,29 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+@font-face { font-family: Outfit; src: url("../../tv/web/fonts/Outfit.woff2") format("woff2"); font-weight: 100 900; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: transparent; font-family: Outfit; color: #f4f1ea; }
+.art { position: relative; overflow: hidden; background: radial-gradient(120% 120% at 85% -10%, #26262c 0%, #0b0b0d 55%, #09090b 100%); display: flex; align-items: center; }
+.icon { width: 512px; height: 512px; justify-content: center; }
+.icon svg { width: 300px; height: 300px; }
+.banner { width: 1280px; height: 720px; padding: 0 120px; gap: 64px; }
+.banner svg { width: 220px; height: 220px; flex: none; }
+.banner .word { font-size: 196px; font-weight: 700; letter-spacing: -0.035em; line-height: 1; }
+.banner .tag { margin-top: 18px; font-size: 52px; font-weight: 400; color: rgba(244,241,234,.66); letter-spacing: -0.01em; }
+.feature { width: 1920px; height: 1080px; padding: 0 160px; gap: 88px; }
+.feature svg { width: 300px; height: 300px; flex: none; }
+.feature .word { font-size: 240px; font-weight: 700; letter-spacing: -0.035em; line-height: 1; }
+.feature .tag { margin-top: 26px; font-size: 64px; color: rgba(244,241,234,.66); }
+</style></head>
+<body>
+<template id="mark"><svg viewBox="0 0 52 52" fill="none"><rect x="1.5" y="1.5" width="49" height="49" rx="13" stroke="#f4f1ea" stroke-width="3"/><path d="M15 33l8-7-8-7" stroke="#f4f1ea" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M27 35h10" stroke="#f4f1ea" stroke-width="3.5" stroke-linecap="round"/></svg></template>
+<div id="root"></div>
+<script>
+const kind = new URLSearchParams(location.search).get('kind');
+const mark = document.getElementById('mark').innerHTML;
+const root = document.getElementById('root');
+if (kind === 'icon') root.innerHTML = `<div class="art icon">${mark}</div>`;
+else if (kind === 'banner') root.innerHTML = `<div class="art banner">${mark}<div><div class="word">FireDev</div><div class="tag">Develop from anywhere.</div></div></div>`;
+else root.innerHTML = `<div class="art feature">${mark}<div><div class="word">FireDev</div><div class="tag">A voice-first development workstation for Fire TV.</div></div></div>`;
+</script></body></html>

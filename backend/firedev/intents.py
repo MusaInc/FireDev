@@ -93,9 +93,11 @@ def parse(text: str, projects: list[dict], context: dict | None = None) -> Inten
         return Intent("help", "I didn't catch that", confidence=0.0)
     if _STOP.match(t):
         return Intent("cancel_task", "Stop the current task")
-    if ctx.get("pending_approval") and _APPROVE.match(t):
-        return Intent("approve_action", "Approve on the TV")
-    if ctx.get("pending_approval") and _REJECT.match(t):
+    if _APPROVE.match(t) or _REJECT.match(t):
+        if not ctx.get("pending_approval"):
+            return Intent("help", "Nothing is waiting for your approval", confidence=0.5)
+        if _APPROVE.match(t):
+            return Intent("approve_action", "Approve on the TV")
         return Intent("reject_action", "Reject the request")
     if _CONTINUE.match(t):
         return Intent("continue_task", "Continue")

@@ -216,6 +216,10 @@ async def test_restarted_service_reattaches_to_running_agent(fd, tmp_path):
         s = fresh.sessions["fx"]
         assert s.current is not None and s.current.title == "SLOW work"
         assert any(a["title"].startswith("Reattached") for a in s.activity)
+        # A new task waits for the reattached turn instead of starting a second agent on the same thread.
+        await fresh.execute("send_agent_task", {"project": "fx", "task": "Fix the app"}, TV)
+        await asyncio.sleep(1.5)
+        assert sum(1 for r in s.runs.values() if r.kind == "agent" and not r.done.is_set()) == 1
         await fresh.execute("cancel_task", {"project": "fx"}, TV)
         await next_event(fresh, "task_cancelled", timeout=20)
     finally:
@@ -246,3 +250,48 @@ async def test_voice_flow(fd):
     await next_event(fd, "approval_required")
     r = await fd.voice("Approve", PHONE)
     assert r["navigate"] == "approval" and fd.approvals  # voice never approves by itself
+
+
+def _helpers_for(path: str) -> list[str]:
+    out = subprocess.run(["pgrep", "-fa", "^bash .*/.firedev/bin/firedev-(watch|follow)"], capture_output=True, text=True).stdout
+    return [ln for ln in out.splitlines() if path in ln]
+
+
+async def test_no_remote_helpers_survive_a_dropped_connection(fd):
+    await fd.execute("open_project", {"project": "fx"}, TV)
+    s = fd.sessions["fx"]
+    queue = s.queue_dir
+    for _ in range(20):
+        if _helpers_for(queue):
+            break
+        await asyncio.sleep(0.2)
+    assert _helpers_for(queue), "watcher should be running"
+    s.remote.drop()
+    await next_event(fd, "session_connected", timeout=20)
+    await asyncio.sleep(1.5)
+    assert len(_helpers_for(queue)) == 1, _helpers_for(queue)  # the new connection's watcher only
+    await s.close()
+    await asyncio.sleep(1.5)
+    assert _helpers_for(queue) == []
+
+
+async def test_request_claimed_by_a_dead_watcher_is_picked_up_again(fd):
+    await fd.execute("open_project", {"project": "fx"}, TV)
+    s = fd.sessions["fx"]
+    await s.close()
+    # The agent's request was claimed (renamed to .taken) but never answered, e.g. FireDev went down mid-claim.
+    q = Path(s.queue_dir)
+    (q / "r123abc.taken").write_text('{"id":"r123abc","type":"action","action":"test","command":"","reason":"","cwd":"."}')
+    await fd.execute("open_project", {"project": "fx"}, TV)
+    e = await next_event(fd, "tests_finished", timeout=20)
+    assert e.data["total"] == 3
+    assert (q / "r123abc.state").read_text().startswith("running ")
+
+
+async def test_runs_recreate_a_killed_tmux_session(fd):
+    await fd.execute("open_project", {"project": "fx"}, TV)
+    s = fd.sessions["fx"]
+    subprocess.run(["tmux", "kill-session", "-t", f"={s.project.tmux_session}"], check=True)
+    await fd.execute("run_action", {"project": "fx", "action": "test"}, TV)
+    e = await next_event(fd, "tests_finished", timeout=20)
+    assert e.data["total"] == 3

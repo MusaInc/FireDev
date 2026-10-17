@@ -335,6 +335,8 @@ class ProjectSession:
             "",
         ])
         await r.write_file(f"{d}/cmd.sh", script, mode="755")
+        # The session may have been killed by hand (or by `firedev demo reset`) since we connected.
+        await self._ensure_tmux()
         await r.run(f"tmux new-window -d -t ={q(self.project.tmux_session)}: -n {q(run_id)} -c {q(self.path)} 'bash -l {d}/cmd.sh'", check=True)
         await r.write_file(f"{d}/window", f"{self.project.tmux_session} {run_id}\n")
         self.runs[run_id] = run
@@ -490,7 +492,7 @@ class ProjectSession:
             if ev.get("transient"):
                 self.set_status("Reconnecting to the model…")
             elif task:
-                task.agent_error = ev["message"]
+                task.agent_error = _unwrap_error(ev["message"])
         elif k == "turn_completed":
             pass
 
@@ -554,7 +556,8 @@ class ProjectSession:
         label = (f"Tests: {t['passed']} / {t['total']} passed" if t.get("total") is not None
                  else "Tests passed" if t["state"] == "passed" else t.get("message", "Tests failed"))
         self.add_activity("tests", label, level=0, status="done" if t["state"] == "passed" else "failed", ref=run.id if run else None, task=tid)
-        self.emit("tests_finished", tid, **{k: v for k, v in t.items() if k != "errors"}, errors=t.get("errors", []))
+        self.emit("tests_finished", tid, **{k: v for k, v in t.items() if k != "errors"}, errors=t.get("errors", []),
+                  source=run.source if run else "agent")
 
     def _record_build(self, tid, out: str, code, run: Run | None) -> None:
         b = parsers.parse_build_output(out, code, self.path)
@@ -564,7 +567,7 @@ class ProjectSession:
         n = b["error_count"]
         label = "Build succeeded" if b["ok"] else f"Build failed · {n} error{'s' if n != 1 else ''}" if n else "Build failed"
         self.add_activity("build", label, level=0, status="done" if b["ok"] else "failed", ref=run.id if run else None, task=tid)
-        self.emit("build_finished", tid, **self.build)
+        self.emit("build_finished", tid, **self.build, source=run.source if run else "agent")
 
     async def _record_artifact(self, path: str) -> None:
         code, out, _ = await self.remote.run(f"cd {shlex.quote(self.path)} && stat -c '%s %Y' {shlex.quote(path)}")
@@ -585,7 +588,7 @@ class ProjectSession:
                        "message": _last_line(text)}
         self.add_activity("deploy", "Deployment complete" if code == 0 else "Deployment failed", detail=_last_line(text),
                           level=run.level, status="done" if code == 0 else "failed", ref=run.id, task=tid)
-        self.emit("deploy_finished", tid, **self.deploy, tests=self.tests, build=self.build)
+        self.emit("deploy_finished", tid, **self.deploy, tests=self.tests, build=self.build, source=run.source)
 
     # --- tasks --------------------------------------------------------------------------------------------
 
@@ -605,7 +608,8 @@ class ProjectSession:
 
     async def _worker(self) -> None:
         while not self._closed:
-            if not self.pending:
+            # A turn reattached after a restart is still running: new tasks wait for it.
+            if not self.pending or self.current is not None:
                 self._wake.clear()
                 await self._wake.wait()
                 continue
@@ -644,7 +648,8 @@ class ProjectSession:
             return
         task.base_ref = await self._snapshot_ref(task.id)
         first = not self.agent_state["thread_id"]
-        prompt = self.adapter.compose_prompt(task.prompt or task.text, self._context_for_agent(), first_turn=first)
+        prompt = self.adapter.compose_prompt(task.prompt or task.text, self._context_for_agent(), first_turn=first,
+                                             tool=f"{self.remote.home}/.firedev/bin/firedev")
         task.status_text = f"Asking {self.adapter.display}…"
         d = f"{self.state_dir}/runs"
         run_id_hint = _rid("p")
@@ -1052,11 +1057,25 @@ def _agent_failure(out: str) -> str | None:
                 continue
             msg = ev.get("message") or (ev.get("error") or {}).get("message")
             if msg:
-                return str(msg)[:300]
+                return _unwrap_error(str(msg))[:300]
             continue
         if re.search(r"(?i)error|not found|denied|limit", line):
             return line[:300]
     return None
+
+
+def _unwrap_error(msg: str) -> str:
+    """Agents sometimes wrap an API error as JSON inside the message; show the human sentence."""
+    for _ in range(3):
+        try:
+            data = json.loads(msg)
+        except (json.JSONDecodeError, TypeError):
+            return msg
+        inner = data.get("error") if isinstance(data, dict) else None
+        msg = (inner.get("message") if isinstance(inner, dict) else None) or data.get("message") or msg
+        if not msg.strip().startswith("{"):
+            return msg
+    return msg
 
 
 def _log_failure(t: asyncio.Task) -> None:

@@ -1,0 +1,1 @@
+-keepclassmembers class dev.firedev.tv.MainActivity$Bridge { @android.webkit.JavascriptInterface <methods>; }

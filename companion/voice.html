@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#09090b">
+<title>FireDev microphone</title>
+<style>
+  @font-face { font-family: Outfit; src: url("/tv/fonts/Outfit.woff2") format("woff2"); font-weight: 100 900; }
+  :root { --base: #09090b; --ivory: #f4f1ea; --ink: #15140f; --t2: rgba(244,241,234,.72); --t3: rgba(244,241,234,.5);
+    --s1: rgba(255,255,255,.05); --s2: rgba(255,255,255,.09); --line: rgba(255,255,255,.12); --ok: #6fd6a0; --bad: #f2776b; --warn: #f2c25b; --live: #8fb8ff; }
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html, body { background: var(--base); color: var(--ivory); font-family: Outfit, system-ui, sans-serif; min-height: 100%; }
+  body { padding: max(20px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom)); max-width: 520px; margin: 0 auto; display: flex; flex-direction: column; min-height: 100vh; }
+  header { display: flex; align-items: center; gap: 12px; }
+  header b { font-size: 20px; font-weight: 700; }
+  .pill { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; border-radius: 16px; background: var(--s1); border: 1px solid var(--line); font-size: 13px; font-weight: 600; color: var(--t2); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--t3); }
+  .dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); } .dot.warn { background: var(--warn); } .dot.live { background: var(--live); }
+  .status { margin-top: 20px; padding: 16px; border-radius: 16px; background: var(--s1); border: 1px solid var(--line); }
+  .status .meta { font-size: 13px; color: var(--t3); font-weight: 500; }
+  .status .task { margin-top: 4px; font-size: 18px; font-weight: 600; }
+  .status .line { margin-top: 4px; font-size: 15px; color: var(--t2); }
+  .approval { display: none; margin-top: 12px; padding: 14px 16px; border-radius: 14px; border: 1px solid rgba(242,194,91,.5); color: var(--warn); font-size: 15px; font-weight: 600; }
+  .approval.show { display: block; }
+  .heard { margin-top: 28px; min-height: 96px; font-size: 28px; line-height: 1.2; font-weight: 500; letter-spacing: -.01em; }
+  .heard .partial { color: var(--t2); }
+  .reply { margin-top: 8px; font-size: 16px; color: var(--t2); min-height: 22px; }
+  .reply.bad { color: var(--bad); }
+  .mic { margin: 28px auto 0; width: 168px; height: 168px; border-radius: 50%; border: none; background: var(--s2); color: var(--ivory); display: flex; align-items: center; justify-content: center; position: relative; touch-action: none; user-select: none; -webkit-user-select: none; }
+  .mic svg { width: 64px; height: 64px; }
+  .mic.on { background: var(--ivory); color: var(--ink); }
+  .mic.on::after { content: ""; position: absolute; inset: -8px; border-radius: 50%; border: 3px solid var(--ivory); animation: ring 1.6s ease-out infinite; }
+  @keyframes ring { from { transform: scale(1); opacity: .6; } to { transform: scale(1.4); opacity: 0; } }
+  .mic:disabled { opacity: .4; }
+  .hint { text-align: center; margin-top: 14px; font-size: 14px; color: var(--t3); }
+  form { display: flex; gap: 8px; margin-top: 24px; }
+  input { flex: 1; min-width: 0; height: 52px; padding: 0 16px; border-radius: 14px; border: 1px solid var(--line); background: var(--s1); color: var(--ivory); font: inherit; font-size: 17px; }
+  input:focus { outline: 2px solid var(--ivory); outline-offset: 1px; }
+  button.send { height: 52px; padding: 0 20px; border-radius: 14px; border: none; background: var(--ivory); color: var(--ink); font: inherit; font-size: 16px; font-weight: 600; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+  .chip { height: 40px; padding: 0 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--s1); color: var(--ivory); font: inherit; font-size: 14px; font-weight: 500; }
+  .chip:active { background: var(--ivory); color: var(--ink); }
+  .mode { display: flex; gap: 6px; margin-top: 24px; padding: 4px; border-radius: 14px; background: var(--s1); border: 1px solid var(--line); }
+  .mode button { flex: 1; height: 40px; border-radius: 10px; border: none; background: none; color: var(--t2); font: inherit; font-size: 14px; font-weight: 600; }
+  .mode button.sel { background: var(--s2); color: var(--ivory); }
+  .note { margin-top: auto; padding-top: 24px; font-size: 12px; color: var(--t3); line-height: 1.5; }
+  .gate { margin-top: 40px; font-size: 18px; line-height: 1.5; color: var(--t2); }
+</style>
+</head>
+<body>
+<header>
+  <svg width="30" height="30" viewBox="0 0 52 52" fill="none"><rect x="1.5" y="1.5" width="49" height="49" rx="13" stroke="#f4f1ea" stroke-width="3"/><path d="M15 33l8-7-8-7" stroke="#f4f1ea" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M27 35h10" stroke="#f4f1ea" stroke-width="3.5" stroke-linecap="round"/></svg>
+  <b>FireDev</b>
+  <span class="pill" id="conn"><span class="dot"></span><span>Connecting</span></span>
+</header>
+
+<div id="app" hidden>
+  <div class="status">
+    <div class="meta" id="project">No project open</div>
+    <div class="task" id="task">Ready</div>
+    <div class="line" id="line"></div>
+  </div>
+  <div class="approval" id="approval">Waiting for approval — choose on the TV with the remote.</div>
+
+  <div class="mode" id="mode">
+    <button type="button" data-mode="direct" class="sel">FireDev</button>
+    <button type="button" data-mode="alexa">Alexa (simulated)</button>
+  </div>
+
+  <div class="heard" id="heard"></div>
+  <div class="reply" id="reply"></div>
+
+  <button class="mic" id="mic" type="button" aria-label="Hold to talk">
+    <svg viewBox="0 0 56 56" fill="none"><rect x="20" y="6" width="16" height="28" rx="8" stroke="currentColor" stroke-width="4"/><path d="M12 26c0 9 7 16 16 16s16-7 16-16M28 42v8" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>
+  </button>
+  <div class="hint" id="hint">Hold to talk</div>
+
+  <form id="form" autocomplete="off">
+    <input id="text" placeholder="Or type (your keyboard’s mic works too)" enterkeyhint="send">
+    <button class="send" type="submit">Send</button>
+  </form>
+  <div class="chips" id="chips"></div>
+</div>
+
+<div class="gate" id="gate" hidden>This page needs a link from your TV. On the TV, open FireDev → Phone microphone and scan the code.</div>
+
+<div class="note">Your words go to your FireDev service and appear on the TV. FireDev turns them into a fixed set of actions or a task for your coding agent. This page can never approve anything: approvals happen on the TV.</div>
+
+<script>
+(function () {
+  var KEY = 'firedev.voice.token';
+  var token = null;
+  var m = /[#&]t=([^&]+)/.exec(location.hash);
+  if (m) { token = decodeURIComponent(m[1]); try { localStorage.setItem(KEY, token); } catch (e) {} history.replaceState(null, '', location.pathname); }
+  if (!token) { try { token = localStorage.getItem(KEY); } catch (e) {} }
+  var $ = function (id) { return document.getElementById(id); };
+  if (!token) { $('gate').hidden = false; setConn('bad', 'Not paired'); return; }
+  $('app').hidden = false;
+
+  var ws, focus = null, projects = {}, mode = 'direct', approvals = 0;
+  var CHIPS = ['Open my Android project', 'Why is the build failing?', 'Fix it and run the tests', 'Build the app', 'Show me what changed', 'Deploy the preview', 'What are you doing?', 'Stop'];
+  CHIPS.forEach(function (c) {
+    var b = document.createElement('button'); b.className = 'chip'; b.type = 'button'; b.textContent = c;
+    b.onclick = function () { send(c); }; $('chips').appendChild(b);
+  });
+
+  function setConn(cls, text) { $('conn').innerHTML = '<span class="dot ' + cls + '"></span><span>' + text + '</span>'; }
+
+  function connect() {
+    var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(proto + '//' + location.host + '/ws?token=' + encodeURIComponent(token));
+    ws.onopen = function () { setConn('ok', 'Connected'); };
+    ws.onclose = function () { setConn('warn', 'Reconnecting'); setTimeout(connect, 1500); };
+    ws.onmessage = function (e) {
+      var msg = JSON.parse(e.data);
+      if (msg.type === 'pairing') { ws.onclose = null; ws.close(); try { localStorage.removeItem(KEY); } catch (x) {} $('app').hidden = true; $('gate').hidden = false; setConn('bad', 'Link expired'); return; }
+      if (msg.type === 'hello') { projects = msg.projects || {}; focus = msg.focus; approvals = (msg.approvals || []).length; render(); return; }
+      if (msg.type === 'state') { projects[msg.project] = msg.data.snapshot; render(); return; }
+      if (msg.type === 'approval_required') { approvals++; render(); }
+      if (msg.type === 'approval_accepted' || msg.type === 'approval_rejected') { approvals = Math.max(0, approvals - 1); render(); }
+      if (msg.type === 'voice_command' && msg.project) focus = msg.project;
+      if (msg.type === 'voice_reply') reply(msg.data.reply, msg.data.ok);
+      if (msg.type === 'reply' && !msg.ok) reply(msg.error, false);
+    };
+  }
+
+  function render() {
+    var p = projects[focus] || null;
+    if (!p) { var ids = Object.keys(projects); if (ids.length === 1) p = projects[ids[0]]; }
+    $('project').textContent = p ? p.name + ' · ' + p.machine : 'No project open';
+    var t = p && (p.task || p.last_task);
+    $('task').textContent = t ? t.title : 'Ready';
+    $('line').textContent = p && p.task ? p.task.status_text : t ? (t.status === 'completed' ? 'Done' : t.status) : '';
+    $('approval').className = 'approval' + (approvals ? ' show' : '');
+  }
+
+  function reply(text, ok) { $('reply').textContent = text || ''; $('reply').className = 'reply' + (ok === false ? ' bad' : ''); }
+
+  var seq = 0;
+  function send(text) {
+    text = (text || '').trim();
+    if (!text) return;
+    $('heard').textContent = '“' + text + '”';
+    reply('');
+    if (mode === 'alexa') return alexa(text);
+    ws && ws.readyState === 1 && ws.send(JSON.stringify({ op: 'voice', phase: 'final', text: text, source: 'voice', id: ++seq }));
+  }
+
+  function phase(p, text) { ws && ws.readyState === 1 && ws.send(JSON.stringify({ op: 'voice', phase: p, text: text || '', source: mode === 'alexa' ? 'alexa' : 'voice' })); }
+
+  // Simulated Alexa: map the words to the skill's intents the way Alexa's language model would, then send a real
+  // Alexa Skills Kit request to FireDev's /alexa endpoint and speak the answer.
+  var INTENTS = [
+    [/why .*(build|compile).*(fail|broken)/i, 'WhyBuildFailingIntent'], [/fix .*test/i, 'FixAndTestIntent'], [/^(run|rerun) .*tests?$/i, 'RunTestsIntent'],
+    [/^(build|rebuild)\b/i, 'BuildAppIntent'], [/deploy|ship/i, 'DeployPreviewIntent'], [/logs?\b/i, 'CheckLogsIntent'],
+    [/what changed|show .*changes|diff/i, 'ShowChangesIntent'], [/undo|revert/i, 'UndoIntent'], [/status|what are you doing|how.s it going/i, 'StatusIntent'],
+    [/^stop( the task)?$/i, 'StopTaskIntent'], [/^continue|keep going/i, 'ContinueTaskIntent'], [/^approve/i, 'ApproveIntent'], [/^reject/i, 'RejectIntent'],
+  ];
+  function alexa(text) {
+    var t = text.replace(/^alexa,?\s*/i, '').replace(/^(ask|tell) fire ?dev (to )?/i, '');
+    var intent = { name: 'AgentTaskIntent', slots: { request: { name: 'request', value: t } } };
+    var open = /^open (?:my |the )?(.+?)(?: project)?$/i.exec(t);
+    if (open) intent = { name: 'OpenProjectIntent', slots: { project: { name: 'project', value: open[1] } } };
+    else for (var i = 0; i < INTENTS.length; i++) if (INTENTS[i][0].test(t)) { intent = { name: INTENTS[i][1], slots: {} }; break; }
+    var body = { version: '1.0', session: { new: true, sessionId: 'sim-' + Date.now(), application: { applicationId: 'amzn1.ask.skill.firedev-sim' } },
+      request: { type: 'IntentRequest', requestId: 'sim-' + Date.now(), locale: 'en-GB', timestamp: new Date().toISOString(), intent: intent } };
+    fetch('/alexa', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify(body) })
+      .then(function (r) { return r.json(); })
+      .then(function (r) {
+        var say = r.response && r.response.outputSpeech ? r.response.outputSpeech.text : '';
+        reply('Alexa: ' + say, true);
+        if (window.speechSynthesis && say) { var u = new SpeechSynthesisUtterance(say); u.rate = 1.05; speechSynthesis.speak(u); }
+      }).catch(function () { reply('Alexa simulation failed', false); });
+  }
+
+  Array.prototype.forEach.call(document.querySelectorAll('#mode button'), function (b) {
+    b.onclick = function () { mode = b.dataset.mode; Array.prototype.forEach.call(document.querySelectorAll('#mode button'), function (x) { x.classList.toggle('sel', x === b); }); };
+  });
+
+  $('form').onsubmit = function (e) { e.preventDefault(); send($('text').value); $('text').value = ''; };
+
+  // Hold-to-talk with the browser's speech recognition (Chrome/Safari on HTTPS).
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  var rec = null, finalText = '', holding = false;
+  if (!SR || !window.isSecureContext) {
+    $('mic').disabled = true;
+    $('hint').textContent = window.isSecureContext ? 'Speech recognition isn’t available in this browser: type or use your keyboard’s mic.' : 'Talking needs HTTPS: type below, or use your keyboard’s mic.';
+  } else {
+    var start = function (e) {
+      e.preventDefault(); if (holding) return; holding = true; finalText = '';
+      rec = new SR(); rec.lang = navigator.language || 'en-GB'; rec.interimResults = true; rec.continuous = true;
+      rec.onresult = function (ev) {
+        var interim = ''; finalText = '';
+        for (var i = 0; i < ev.results.length; i++) { if (ev.results[i].isFinal) finalText += ev.results[i][0].transcript; else interim += ev.results[i][0].transcript; }
+        var shown = (finalText + ' ' + interim).trim();
+        $('heard').innerHTML = '<span class="partial">“' + shown.replace(/</g, '&lt;') + '”</span>';
+        phase('partial', shown);
+      };
+      rec.onerror = function () { stop(); };
+      rec.start(); $('mic').classList.add('on'); $('hint').textContent = 'Listening… release to send'; phase('listening');
+    };
+    var stop = function () {
+      if (!holding) return; holding = false; $('mic').classList.remove('on'); $('hint').textContent = 'Hold to talk';
+      if (rec) { rec.onend = function () { var t = finalText.trim() || ($('heard').textContent || '').replace(/[“”]/g, '').trim(); if (t) send(t); else phase('cancel'); }; rec.stop(); }
+    };
+    $('mic').addEventListener('pointerdown', start); $('mic').addEventListener('pointerup', stop); $('mic').addEventListener('pointerleave', stop); $('mic').addEventListener('pointercancel', stop);
+  }
+  connect();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.FireDev" parent="@android:style/Theme.Material.NoActionBar.Fullscreen">
+        <item name="android:windowBackground">@color/base</item>
+        <item name="android:colorPrimary">@color/base</item>
+        <item name="android:colorAccent">@color/ivory</item>
+    </style>
+</resources>

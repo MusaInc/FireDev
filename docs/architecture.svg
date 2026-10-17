@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" font-family="Outfit, Inter, system-ui, sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#8d8a84"/></marker>
+    <style>
+      .box { fill: #141417; stroke: #2c2c31; stroke-width: 2; }
+      .hl { fill: #18181c; stroke: #f4f1ea; stroke-width: 2; }
+      .inner { fill: #1d1d22; stroke: #34343a; stroke-width: 1.5; }
+      .warn { fill: #1d1a12; stroke: #f2c25b; stroke-width: 1.5; }
+      .h { fill: #f4f1ea; font-size: 26px; font-weight: 600; }
+      .t { fill: #f4f1ea; font-size: 18px; font-weight: 500; }
+      .m { fill: #9b978f; font-size: 15px; }
+      .mono { font-family: "Noto Sans Mono", ui-monospace, monospace; fill: #c9c5bd; font-size: 14px; }
+      .lbl { fill: #b8b4ac; font-size: 15px; font-weight: 600; }
+      .line { stroke: #8d8a84; stroke-width: 2; fill: none; }
+      .dash { stroke: #8d8a84; stroke-width: 2; fill: none; stroke-dasharray: 6 6; }
+    </style>
+  </defs>
+  <rect width="1600" height="900" fill="#09090b"/>
+  <text x="60" y="64" class="h" font-size="32">FireDev architecture</text>
+  <text x="60" y="94" class="m">Voice and the remote drive a service you run; the service drives coding agents on your own machines over SSH.</text>
+
+  <!-- Inputs -->
+  <rect x="60" y="140" width="300" height="96" rx="16" class="box"/>
+  <text x="84" y="178" class="t">Phone microphone</text>
+  <text x="84" y="204" class="m">/voice page · live transcript</text>
+  <rect x="60" y="256" width="300" height="96" rx="16" class="box"/>
+  <text x="84" y="294" class="t">Alexa skill (simulated)</text>
+  <text x="84" y="320" class="m">ASK JSON → /alexa</text>
+  <rect x="60" y="372" width="300" height="96" rx="16" class="box"/>
+  <text x="84" y="410" class="t">MCP clients</text>
+  <text x="84" y="436" class="m">/mcp · firedev mcp (stdio)</text>
+
+  <!-- Fire TV -->
+  <rect x="60" y="560" width="300" height="260" rx="18" class="hl"/>
+  <text x="84" y="602" class="h">Fire TV</text>
+  <rect x="84" y="624" width="252" height="76" rx="10" class="inner"/>
+  <text x="102" y="656" class="t">TV interface</text>
+  <text x="102" y="680" class="m">workspace · diff · approvals</text>
+  <rect x="84" y="716" width="252" height="80" rx="10" class="inner"/>
+  <text x="102" y="748" class="t">Android shell</text>
+  <text x="102" y="772" class="m">D-pad keys · lifecycle</text>
+
+  <!-- Service -->
+  <rect x="470" y="140" width="560" height="680" rx="20" class="hl"/>
+  <text x="498" y="186" class="h">FireDev service</text>
+  <text x="498" y="212" class="m">Python · FastAPI · asyncssh · runs on your laptop or VPS</text>
+  <rect x="498" y="236" width="504" height="72" rx="12" class="inner"/>
+  <text x="520" y="266" class="t">One command API</text>
+  <text x="520" y="290" class="m">TV, phone, CLI, MCP and Alexa all call the same commands</text>
+  <rect x="498" y="324" width="504" height="72" rx="12" class="inner"/>
+  <text x="520" y="354" class="t">Intent layer</text>
+  <text x="520" y="378" class="m">words → fixed intents or an agent task; never raw shell</text>
+  <rect x="498" y="412" width="504" height="96" rx="12" class="warn"/>
+  <text x="520" y="442" class="t">Risk levels and approvals</text>
+  <text x="520" y="466" class="m">0 read · 1 edit · 2 approve on TV · 3 hold OK on TV</text>
+  <text x="520" y="488" class="m">only the TV approves; FireDev classifies every command</text>
+  <rect x="498" y="524" width="504" height="96" rx="12" class="inner"/>
+  <text x="520" y="554" class="t">Project sessions</text>
+  <text x="520" y="578" class="m">SSH · reconnect · reattach after restart · structured events</text>
+  <text x="520" y="600" class="m">agent adapters: Codex · Claude Code · shell</text>
+  <rect x="498" y="636" width="504" height="72" rx="12" class="inner"/>
+  <text x="520" y="666" class="t">Event bus + state snapshots</text>
+  <text x="520" y="690" class="m">WebSocket push · task history (JSONL)</text>
+  <text x="498" y="752" class="mono">session_connected · agent_message · command_started</text>
+  <text x="498" y="774" class="mono">file_changed · tests_finished · build_finished</text>
+  <text x="498" y="796" class="mono">approval_required · approval_accepted · task_completed</text>
+
+  <!-- Machine -->
+  <rect x="1140" y="140" width="400" height="680" rx="20" class="box"/>
+  <text x="1164" y="186" class="h">Your machine</text>
+  <text x="1164" y="212" class="m">computer or VPS, reached over SSH (keys)</text>
+  <rect x="1164" y="236" width="352" height="340" rx="14" class="inner"/>
+  <text x="1186" y="268" class="t">tmux session  firedev-&lt;project&gt;</text>
+  <rect x="1186" y="288" width="308" height="104" rx="10" class="warn"/>
+  <text x="1206" y="318" class="t">Codex (sandboxed)</text>
+  <text x="1206" y="342" class="m">codex exec --json, resumed by thread</text>
+  <text x="1206" y="364" class="m">no network · no sudo · writes only</text>
+  <text x="1206" y="384" class="m">inside the repo</text>
+  <rect x="1186" y="408" width="308" height="72" rx="10" class="box"/>
+  <text x="1206" y="438" class="t">Runs: tests · build · deploy</text>
+  <text x="1206" y="462" class="m">outside the sandbox, after checks</text>
+  <rect x="1186" y="496" width="308" height="64" rx="10" class="box"/>
+  <text x="1206" y="524" class="t mono" style="fill:#f4f1ea">firedev run / request</text>
+  <text x="1206" y="546" class="m">the agent's only way out</text>
+  <rect x="1164" y="596" width="352" height="96" rx="14" class="inner"/>
+  <text x="1186" y="630" class="t">~/.firedev</text>
+  <text x="1186" y="654" class="m">run logs, exit codes, agent thread id:</text>
+  <text x="1186" y="676" class="m">survive drops, sleep and restarts</text>
+  <rect x="1164" y="708" width="352" height="88" rx="14" class="inner"/>
+  <text x="1186" y="742" class="t">Project repository</text>
+  <text x="1186" y="766" class="m">git diff for review · undo snapshots</text>
+
+  <!-- arrows -->
+  <path d="M360 188 H470" class="line" marker-end="url(#a)"/>
+  <path d="M360 304 H470" class="line" marker-end="url(#a)"/>
+  <path d="M360 420 H470" class="line" marker-end="url(#a)"/>
+  <path d="M360 690 H470" class="line" marker-start="url(#a)" marker-end="url(#a)"/>
+  <text x="378" y="676" class="lbl">WebSocket</text>
+  <text x="378" y="174" class="lbl">voice</text>
+  <path d="M1030 470 H1140" class="line" marker-start="url(#a)" marker-end="url(#a)"/>
+  <text x="1052" y="456" class="lbl">SSH</text>
+  <path d="M1186 528 C 1100 528, 1080 600, 1030 600" class="dash" marker-end="url(#a)"/>
+  <text x="1040" y="640" class="m">request queue</text>
+</svg>
