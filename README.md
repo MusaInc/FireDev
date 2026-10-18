@@ -31,13 +31,13 @@ how you give instructions.
 | Risk levels 0–3, approvals on the TV, held confirmation for level 3 | **Working**, tested with remote keys |
 | Agent requests outside its sandbox (`firedev run`, `firedev request`) gated by the TV | **Working**, tested |
 | Diff review, raw terminal output, undo of the agent's last change | **Working**, tested |
-| Fire TV app (Kotlin WebView shell + TV interface), D-pad only | **Working** in the browser at 1080p (12 remote-key tests); APK builds. **Not yet run on a physical Fire TV** |
+| Fire TV app (Kotlin WebView shell + TV interface), D-pad only | **Working** in the browser at 1080p (12 remote-key tests) and when loaded the way the APK loads it (`tools/shell-sim.mjs`); APK builds. **Not yet run on a physical Fire TV** (pending) |
 | Phone microphone (`/voice`): live transcript on the TV, typed fallback | **Working** (tested in a phone-sized browser and with streamed partial transcripts). Browser speech recognition needs HTTPS; not yet tried on a real phone |
 | Pairing a TV with a 6-digit code | **Working**, tested |
 | MCP server (`/mcp`, `firedev mcp` stdio) | **Working**: unit-tested, and the stdio bridge was exercised against the running service |
 | Claude Code adapter (`claude -p --output-format stream-json`) | **Working**: a real turn through FireDev ran the tests via the helper (`tools/claude_check.py`) |
 | Plain shell adapter | Implemented |
-| Alexa | **Simulated**: a real Alexa Skills Kit endpoint (`/alexa`) and interaction model, driven from the phone page. Not published as a skill (no request-signature check yet) |
+| Alexa | **Simulated**: a real Alexa Skills Kit endpoint (`/alexa`) and interaction model, driven from the phone page. Not published as a skill (no request-signature check yet), so keep `/alexa` off the internet (see *Running behind HTTPS*) |
 | On-device speech on the TV | Used if the device has a recogniser; most Fire TVs don't |
 | Multiple machines in one UI, project setup from the TV, Alexa+ integration | Future |
 
@@ -121,8 +121,32 @@ adb install -r app/build/outputs/apk/release/app-release.apk
 ```
 
 Open FireDev on the TV. It shows a 6-digit code; on the service machine run `./firedev pair 123456`.
+If the TV can't start the interface, it says why on screen instead of staying blank.
 To point an installed TV at a different service without rebuilding:
 `adb shell am start -n dev.firedev.tv/.MainActivity -e server http://host:8130`.
+
+### Running behind HTTPS
+
+To reach FireDev from anywhere (and give the phone microphone the HTTPS that browser speech recognition needs),
+keep the service on `127.0.0.1` and put a reverse proxy in front of it. Set `server.public_url` to the public
+address and build the APK with `firedev.server=https://your-host`. With Caddy:
+
+```
+firedev.example.com {
+	route {
+		handle /alexa* {
+			respond 404   # no Alexa request-signature check yet
+		}
+		handle {
+			reverse_proxy 127.0.0.1:8130
+		}
+	}
+}
+```
+
+Everything else is safe to expose: the API, `/mcp` and `/ws` need a paired token, a new TV only gets a pairing
+code (at most 16 wait at once, and a code is never reused while live), and only `firedev pair` on the service
+machine turns a code into a token.
 
 ### 6. Talk to it
 
@@ -147,7 +171,7 @@ continue · undo that change*. Anything else becomes a task for the coding agent
 ## Tests
 
 ```bash
-cd backend && ../.venv/bin/python -m pytest -q                       # 78 unit tests
+cd backend && ../.venv/bin/python -m pytest -q                       # 80 unit tests
 FIREDEV_TEST_SSH=1 ../.venv/bin/python -m pytest -q                  # + 12 over real SSH/tmux to localhost
 npm run test:e2e                                                     # 12 TV + phone tests driven by remote keys
 cd tv/android && ./gradlew testDebugUnitTest assembleDebug           # shell tests + APK

@@ -63,6 +63,7 @@ def cmd_serve(args, c: cfg.Config) -> None:
 
     from .app import create_app
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    logging.getLogger("asyncssh").setLevel(logging.WARNING)  # one INFO line per SSH channel otherwise
     devices = DeviceStore(cfg.DEFAULT_HOME)
     host = args.host or c.settings.host
     port = args.port or c.settings.port

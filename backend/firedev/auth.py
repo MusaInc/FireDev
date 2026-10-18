@@ -27,6 +27,9 @@ class Client:
     role: str
 
 
+MAX_PENDING_CODES = 16
+
+
 def _hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
@@ -86,14 +89,20 @@ class DeviceStore:
         return [{k: v for k, v in d.items() if k != "token_sha256"} for d in self.devices]
 
     # Pairing: an unpaired TV gets a 6-digit code; `firedev pair <code>` on the server approves it.
-    def new_code(self, waiter) -> str:
-        self.codes = {c: v for c, v in self.codes.items() if v["expires"] > time.time()}
+    # Anyone who can reach the service can ask for a code, so a new code never replaces a live one (that would let
+    # a stranger take over the code a TV is showing) and only a few can wait at once.
+    def new_code(self, waiter) -> str | None:
+        self.codes = {c: v for c, v in self.codes.items() if v["expires"] > time.time() and not v["waiter"].done()}
+        if len(self.codes) >= MAX_PENDING_CODES:
+            return None
         code = f"{secrets.randbelow(1_000_000):06d}"
+        while code in self.codes:
+            code = f"{secrets.randbelow(1_000_000):06d}"
         self.codes[code] = {"expires": time.time() + 600, "waiter": waiter}
         return code
 
     def take_code(self, code: str):
         entry = self.codes.pop(code.replace(" ", ""), None)
-        if not entry or entry["expires"] < time.time():
+        if not entry or entry["expires"] < time.time() or entry["waiter"].done():
             return None
         return entry["waiter"]

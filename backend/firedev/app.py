@@ -141,6 +141,9 @@ def create_app(config: Config, devices: DeviceStore) -> FastAPI:
     async def _pair(websocket: WebSocket):
         fut = asyncio.get_running_loop().create_future()
         code = devices.new_code(fut)
+        if code is None:
+            await websocket.close(code=1013)  # too many TVs pairing at once: the TV retries with backoff
+            return None, None
         await websocket.send_json({"type": "pairing", "code": code})
         recv = asyncio.create_task(websocket.receive_text())
         while True:
