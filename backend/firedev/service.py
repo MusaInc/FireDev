@@ -38,6 +38,7 @@ class Approval:
     level: int
     source: str
     agent: str
+    kind: str = "command"  # command | link (a voice assistant asking to be linked)
     created: float = field(default_factory=time.time)
     future: asyncio.Future | None = None
 
@@ -45,7 +46,7 @@ class Approval:
         return {"id": self.id, "project": self.project, "task": self.task, "command": self.command, "title": self.title,
                 "reason": self.reason, "risk": self.risk, "level": self.level, "level_name": risk.LEVEL_NAMES[self.level],
                 "strong": risk.needs_strong_confirmation(self.level), "source": self.source, "agent": self.agent,
-                "created": self.created}
+                "kind": self.kind, "created": self.created}
 
 
 COMMANDS = {
@@ -103,9 +104,9 @@ class FireDev:
     # --- approvals ------------------------------------------------------------------------------------------
 
     async def request_approval(self, session: ProjectSession, *, task: Task | None, command: str, title: str, reason: str,
-                               risk: str, level: int, source: str) -> tuple[bool, str | None]:
+                               risk: str, level: int, source: str, kind: str = "command") -> tuple[bool, str | None]:
         a = Approval(id=_rid("ap"), project=session.project.id, task=task.id if task else None, command=command,
-                     title=title, reason=reason, risk=risk, level=level, source=source, agent=session.adapter.display)
+                     title=title, reason=reason, risk=risk, level=level, source=source, agent=session.adapter.display, kind=kind)
         a.future = asyncio.get_running_loop().create_future()
         self.approvals[a.id] = a
         item = session.add_activity("approval", "Approval required", detail=command, level=level, status="waiting", task=a.task)

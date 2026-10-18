@@ -86,7 +86,24 @@ class DeviceStore:
         return len(self.devices) != before
 
     def list(self) -> list[dict]:
-        return [{k: v for k, v in d.items() if k != "token_sha256"} for d in self.devices]
+        return [{k: v for k, v in d.items() if k not in ("token_sha256", "alexa_user")} for d in self.devices]
+
+    # An Alexa account is linked by approving it on the TV; afterwards its (verified) Alexa user ID is its credential.
+    def alexa_client(self, user_id: str | None) -> Client | None:
+        if not user_id:
+            return None
+        h = _hash("alexa:" + user_id)
+        for d in self.devices:
+            if d.get("alexa_user") and secrets.compare_digest(h, d["alexa_user"]):
+                d["last_seen"] = time.time()
+                return Client(d["id"], d["name"], d["role"])
+        return None
+
+    def link_alexa(self, user_id: str) -> dict:
+        _, dev = self.create("Alexa", "assistant")  # the token is never handed out: Alexa authenticates by signature
+        dev["alexa_user"] = _hash("alexa:" + user_id)
+        self._save()
+        return dev
 
     # Pairing: an unpaired TV gets a 6-digit code; `firedev pair <code>` on the server approves it.
     # Anyone who can reach the service can ask for a code, so a new code never replaces a live one (that would let

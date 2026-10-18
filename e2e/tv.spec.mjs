@@ -1,6 +1,7 @@
 // The TV interface driven only by remote keys (arrows, OK = Enter, Back = Escape, Menu = m), against a real FireDev
 // service: SSH to localhost, tmux, and the scripted stand-in agent. Runs at 1920×1080.
 import { expect, test } from '@playwright/test';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 
 const tokens = () => JSON.parse(fs.readFileSync(new URL('./.tmp/tokens.json', import.meta.url)));
@@ -259,4 +260,60 @@ test('the phone microphone page sends words that the TV shows, and can never app
   expect(denied.ok).toBeFalsy();
   await tv.keyboard.press('Enter'); // Reject is focused
   await expect(tv.locator('.approval')).toHaveCount(0);
+});
+
+// Alexa requests signed with the test CA's key (e2e/server.py trusts it in place of Amazon's), sent over HTTP.
+async function alexa(request, type, intent, slots) {
+  const req = { type, requestId: 'amzn1.echo-api.request.' + crypto.randomUUID(), timestamp: new Date().toISOString().replace(/\.\d+Z$/, 'Z'), locale: 'en-GB' };
+  if (intent) req.intent = { name: intent, slots: slots || {} };
+  const system = { application: { applicationId: 'amzn1.ask.skill.e2e' }, user: { userId: 'amzn1.ask.account.E2E' }, device: { deviceId: 'fire-tv' } };
+  const body = JSON.stringify({ version: '1.0', context: { System: system }, request: req });
+  const key = fs.readFileSync(new URL('./.tmp/alexa-key.pem', import.meta.url));
+  const sig = crypto.sign('sha256', Buffer.from(body), key).toString('base64');
+  const r = await request.post('/alexa', { headers: { 'Content-Type': 'application/json', SignatureCertChainUrl: 'https://s3.amazonaws.com/echo.api/echo-api-cert.pem', 'Signature-256': sig }, data: body });
+  return { status: r.status(), say: r.ok() ? (await r.json()).response.outputSpeech.text : null };
+}
+
+test('Alexa: unsigned requests are refused, linking needs OK held on the TV, then tasks, results and approvals', async ({ page, request }) => {
+  await open(page);
+  await toWorkspace(page);
+  await idle(page);
+  const unsigned = await request.post('/alexa', { data: { request: { type: 'LaunchRequest' } } });
+  expect(unsigned.status()).toBe(400);
+
+  // An unknown Alexa account gets a code; the TV asks to link it.
+  const first = await alexa(request, 'LaunchRequest');
+  const code = /code ((?:\d ){3}\d)/.exec(first.say)[1].replace(/ /g, '');
+  await expect(page.locator('.approval')).toContainText('Link a voice assistant');
+  await expect(page.locator('.approval .command')).toHaveText('Code ' + code.split('').join(' '));
+  expect((await alexa(request, 'IntentRequest', 'RunTestsIntent')).say).toContain('look at your TV');
+  await press(page, 'ArrowRight');
+  await expect(page.locator('[data-focus-id="approve"]')).toContainText('Hold OK to link');
+  await press(page, 'Enter');
+  await page.waitForTimeout(500);
+  await expect(page.locator('.approval')).toBeVisible();
+  await page.keyboard.down('Enter');
+  await page.waitForTimeout(2300);
+  await page.keyboard.up('Enter');
+  await expect(page.locator('.approval')).toHaveCount(0);
+
+  // Linked: a task starts at once, the TV shows it came from Alexa, and the result can be asked for.
+  expect((await alexa(request, 'LaunchRequest')).say).toContain('FireDev is ready.');
+  const started = await alexa(request, 'IntentRequest', 'RunTestsIntent');
+  expect(started.say).toContain('Run the tests.');
+  await expect(page.locator('.voice')).toContainText('from Alexa');
+  await expect(page.locator('.result')).toBeVisible({ timeout: 30000 });
+  await page.keyboard.press('Enter');
+  // The fixture's tests fail on purpose (it's the broken demo app); Alexa says how many passed.
+  expect((await alexa(request, 'IntentRequest', 'ProgressIntent')).say).toMatch(/^Run the tests failed\. \d+ of \d+ tests passed/);
+  expect((await alexa(request, 'IntentRequest', 'ResultIntent')).say).toMatch(/^Run the tests failed\. \d+ of \d+ tests passed\. The details are on your TV\.$/);
+
+  // A deploy waits on the TV; saying "approve" to Alexa doesn't approve it.
+  expect((await alexa(request, 'IntentRequest', 'DeployPreviewIntent')).say).toContain('approval on the TV');
+  await expect(page.locator('.approval')).toBeVisible();
+  expect((await alexa(request, 'IntentRequest', 'ApproveIntent')).say).toContain('Approvals stay on the TV');
+  await page.waitForTimeout(500);
+  await expect(page.locator('.approval')).toBeVisible();
+  await page.keyboard.press('Enter'); // Reject is focused
+  await expect(page.locator('.approval')).toHaveCount(0);
 });

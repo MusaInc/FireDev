@@ -57,7 +57,7 @@ tmux), 11 remote-key browser tests, and the full journey scripted against the re
 
 ## What's next
 
-Alexa+ as the native voice (today the Alexa skill endpoint is real but driven from a simulated client),
+Alexa+ as the native voice (the Alexa skill is real and verifies Alexa's signatures; it runs as a development-stage skill on your own account),
 project setup from the TV, several machines side by side, and per-project agent users for stronger isolation.
 
 ## Built with

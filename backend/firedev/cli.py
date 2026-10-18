@@ -2,8 +2,9 @@
 
   firedev serve                     start the service (TV WebSocket, phone mic, MCP, Alexa)
   firedev pair <code> [--name N]    pair the TV showing <code>
-  firedev devices                   list paired devices
-  firedev add-assistant <name>      create a token for an MCP client or the Alexa skill
+  firedev devices                   list paired devices (TVs, phones, linked Alexa accounts)
+  firedev unpair <device-id>        remove one, e.g. to unlink Alexa
+  firedev add-assistant <name>      create a token for an MCP client
   firedev say "<words>"             send a voice command as if spoken
   firedev status [project]          print project status
   firedev mcp                       MCP over stdio (bridges to the running service)
@@ -79,6 +80,11 @@ def cmd_pair(args, c):
 def cmd_devices(args, c):
     for d in _call(c, "GET", "/api/devices")["devices"]:
         print(f"{d['id']}  {d['role']:<10} {d['name']}")
+
+
+def cmd_unpair(args, c):
+    _call(c, "DELETE", f"/api/devices/{args.device}")
+    print(f"Removed {args.device}.")
 
 
 def cmd_add_assistant(args, c):
@@ -157,6 +163,7 @@ def main(argv: list[str] | None = None) -> None:
     s = sub.add_parser("serve"); s.add_argument("--host"); s.add_argument("--port", type=int); s.set_defaults(fn=cmd_serve)
     s = sub.add_parser("pair"); s.add_argument("code"); s.add_argument("--name", default="Fire TV"); s.set_defaults(fn=cmd_pair)
     s = sub.add_parser("devices"); s.set_defaults(fn=cmd_devices)
+    s = sub.add_parser("unpair"); s.add_argument("device"); s.set_defaults(fn=cmd_unpair)
     s = sub.add_parser("add-assistant"); s.add_argument("name"); s.add_argument("--role", default="assistant", choices=["assistant", "tv", "voice"]); s.set_defaults(fn=cmd_add_assistant)
     s = sub.add_parser("say"); s.add_argument("words"); s.add_argument("--project"); s.set_defaults(fn=cmd_say)
     s = sub.add_parser("status"); s.add_argument("project", nargs="?"); s.set_defaults(fn=cmd_status)

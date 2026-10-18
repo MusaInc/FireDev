@@ -156,7 +156,8 @@
   var INTENTS = [
     [/why .*(build|compile).*(fail|broken)/i, 'WhyBuildFailingIntent'], [/fix .*test/i, 'FixAndTestIntent'], [/^(run|rerun) .*tests?$/i, 'RunTestsIntent'],
     [/^(build|rebuild)\b/i, 'BuildAppIntent'], [/deploy|ship/i, 'DeployPreviewIntent'], [/logs?\b/i, 'CheckLogsIntent'],
-    [/what changed|show .*changes|diff/i, 'ShowChangesIntent'], [/undo|revert/i, 'UndoIntent'], [/status|what are you doing|how.s it going/i, 'StatusIntent'],
+    [/what changed|show .*changes|diff/i, 'ShowChangesIntent'], [/undo|revert/i, 'UndoIntent'], [/result|what happened|what did (it|you|codex|claude) (do|find)/i, 'ResultIntent'],
+    [/status|progress|update|what are you doing|how.s it going|how it.s going|is it (done|finished)/i, 'ProgressIntent'],
     [/^stop( the task)?$/i, 'StopTaskIntent'], [/^continue|keep going/i, 'ContinueTaskIntent'], [/^approve/i, 'ApproveIntent'], [/^reject/i, 'RejectIntent'],
   ];
   function alexa(text) {

@@ -22,7 +22,7 @@ anything, but nothing risky happens until a person approves it on the TV with th
    |---|---|---|
    | `tv` | 6-digit pairing code confirmed with `firedev pair` on the service machine | everything, including approving |
    | `voice` | QR link created by a paired TV, valid 12 hours | voice commands, status, reject, stop. **Never approve** |
-   | `assistant` | `firedev add-assistant` (MCP, Alexa) | commands and status; approve only if `server.remote_approval: level2`, and never level 3 |
+   | `assistant` | `firedev add-assistant` (MCP), or an Alexa account linked on the TV | commands and status; approve only if `server.remote_approval: level2`, and never level 3 |
    | `admin` | `~/.config/firedev/admin.token` (mode 600) | pairing, devices, reset. **Not approving**: an agent running on the same box might read the file |
 
    Saying "approve" moves the TV's focus to the Approve button. The press still comes from the remote.
@@ -56,12 +56,12 @@ are in `backend/firedev/risk.py`, with tests in `backend/tests/test_risk.py`.
 
 The service listens on 127.0.0.1 by default. To reach it from a TV, either bind to your LAN (`server.host:
 0.0.0.0`) on a network you trust, or put it behind a reverse proxy with HTTPS. HTTPS is also what lets the
-phone page use speech recognition. Every endpoint except `/api/health` and the static pages needs a token.
+phone page use speech recognition. Every endpoint except `/api/health` and the static pages needs a token, except `/alexa`, which instead needs a
+request signed by Alexa (certificate, `Signature-256` and a timestamp within 150 seconds, checked as Amazon
+specifies) for the configured skill ID, from an Alexa account that was linked by holding OK on the TV.
 
 ## Known gaps
 
-- `/alexa` doesn't verify Alexa's request signature yet. It is protected by an assistant token, which is fine
-  for the simulated flow but not for a published skill.
 - A sandboxed agent can still read files your user can read. Run the agent as a user that only has what the
   project needs if that matters to you.
 - Level 1 is not gated. Edits are visible and undoable, but not prevented.

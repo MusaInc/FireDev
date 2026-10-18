@@ -12,7 +12,9 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import alexa, mcp
+from . import mcp
+from .alexa import AlexaSkill
+from .alexa_verify import AlexaVerifier, VerificationError
 from .auth import Client, DeviceStore
 from .config import Config
 from .service import CommandError, FireDev
@@ -25,6 +27,8 @@ COMPANION = ROOT / "companion"
 
 def create_app(config: Config, devices: DeviceStore) -> FastAPI:
     service = FireDev(config, devices)
+    skill = AlexaSkill(service, devices)
+    verifier = AlexaVerifier(config.settings.alexa_skill_id)
     app = FastAPI(title="FireDev", docs_url=None, redoc_url=None)
     app.state.service = service
 
@@ -95,6 +99,14 @@ def create_app(config: Config, devices: DeviceStore) -> FastAPI:
             raise HTTPException(400, str(e)) from e
         return {"token": token, "device": {k: v for k, v in dev.items() if k != "token_sha256"}}
 
+    @app.delete("/api/devices/{device_id}")
+    async def revoke_device(device_id: str, request: Request):
+        if client_from(request).role != "admin":
+            raise HTTPException(403)
+        if not devices.revoke(device_id):
+            raise HTTPException(404, "No device with that ID")
+        return {"ok": True}
+
     @app.get("/api/qr.svg")
     async def qr(request: Request, data: str):
         client_from(request)
@@ -117,8 +129,18 @@ def create_app(config: Config, devices: DeviceStore) -> FastAPI:
 
     @app.post("/alexa")
     async def alexa_endpoint(request: Request):
-        client = client_from(request)
-        return await alexa.handle(service, client, await request.json())
+        body = await request.body()
+        if len(body) > 128 * 1024:
+            raise HTTPException(400, "Bad Request")
+        if request.headers.get("authorization"):
+            # The phone page's simulated Alexa, with a FireDev token: the same power as /api/command.
+            return await skill.handle_simulated(client_from(request), json.loads(body or b"{}"))
+        try:
+            req = await verifier.verify(request.headers, body)
+        except VerificationError as e:
+            log.warning("Refused an Alexa request: %s", e)
+            raise HTTPException(400, "Bad Request") from None
+        return await skill.handle_signed(req)
 
     @app.get("/voice")
     async def voice_page():

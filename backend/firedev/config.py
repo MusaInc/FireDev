@@ -86,6 +86,8 @@ class Settings:
     public_url: str | None = None
     # Which non-TV clients may approve. "tv" means approvals only ever come from a paired TV remote.
     remote_approval: str = "tv"
+    # The Alexa skill allowed to call /alexa (from the Alexa developer console). Unset: signed Alexa requests are refused.
+    alexa_skill_id: str | None = None
 
 
 @dataclass
@@ -111,6 +113,7 @@ def parse(raw: dict, path: Path | None = None) -> Config:
         data_dir=Path(str(s.get("data_dir", DEFAULT_HOME / "data"))).expanduser(),
         public_url=s.get("public_url"),
         remote_approval=str(s.get("remote_approval", "tv")),
+        alexa_skill_id=(str(s["alexa_skill_id"]).strip() or None) if s.get("alexa_skill_id") else None,
     )
     if settings.remote_approval not in {"tv", "level2"}:
         raise ConfigError("server.remote_approval must be 'tv' or 'level2'")

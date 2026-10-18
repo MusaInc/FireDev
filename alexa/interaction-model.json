@@ -41,7 +41,10 @@
             "why is the build failing",
             "why did the build fail",
             "what's wrong with the build",
-            "why is it broken"
+            "why is it broken",
+            "why the build is failing",
+            "why the build failed",
+            "what is wrong with the build"
           ]
         },
         {
@@ -59,7 +62,8 @@
             "run the tests",
             "run tests",
             "test the app",
-            "run the unit tests"
+            "run the unit tests",
+            "to run the tests"
           ]
         },
         {
@@ -106,15 +110,6 @@
           ]
         },
         {
-          "name": "StatusIntent",
-          "samples": [
-            "what's the status",
-            "what are you doing",
-            "how is it going",
-            "what is codex doing"
-          ]
-        },
-        {
           "name": "StopTaskIntent",
           "samples": [
             "stop the task",
@@ -153,7 +148,11 @@
             "tell codex to {request}",
             "ask the agent to {request}",
             "tell the agent to {request}",
-            "ask claude to {request}"
+            "ask claude to {request}",
+            "start a task to {request}",
+            "have codex {request}",
+            "get codex to {request}",
+            "have the agent {request}"
           ],
           "slots": [
             {
@@ -161,6 +160,90 @@
               "type": "AMAZON.SearchQuery"
             }
           ]
+        },
+        {
+          "name": "ProgressIntent",
+          "slots": [],
+          "samples": [
+            "how's it going",
+            "how is it going",
+            "how it's going",
+            "how things are going",
+            "what's the progress",
+            "for progress",
+            "for an update",
+            "give me an update",
+            "what's the status",
+            "for the status",
+            "is it done",
+            "is it finished",
+            "if it is done",
+            "what are you doing",
+            "what is the agent doing",
+            "what is codex doing",
+            "what codex is doing"
+          ]
+        },
+        {
+          "name": "ResultIntent",
+          "slots": [],
+          "samples": [
+            "what was the result",
+            "what's the result",
+            "for the result",
+            "what happened",
+            "what did it do",
+            "what did you do",
+            "what did codex do",
+            "what codex did",
+            "read me the result",
+            "tell me the result",
+            "what did it find",
+            "what it found"
+          ]
+        },
+        {
+          "name": "FixTaskIntent",
+          "slots": [
+            {
+              "name": "request",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "fix {request}",
+            "please fix {request}"
+          ]
+        },
+        {
+          "name": "AddTaskIntent",
+          "slots": [
+            {
+              "name": "request",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "add {request}",
+            "please add {request}"
+          ]
+        },
+        {
+          "name": "ChangeTaskIntent",
+          "slots": [
+            {
+              "name": "request",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "change {request}",
+            "please change {request}"
+          ]
+        },
+        {
+          "name": "AMAZON.FallbackIntent",
+          "samples": []
         }
       ],
       "types": [

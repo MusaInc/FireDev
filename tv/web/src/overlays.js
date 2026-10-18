@@ -98,27 +98,30 @@ export class Overlays {
     const app = this.app;
     const p = app.projects[a.project];
     const strong = a.level >= 3;
+    const link = a.kind === 'link';
     this.holding = null;
     const reject = focusable(h('button.btn', null, 'Reject'), 'reject', { select: () => this.decide(a, false) });
     let approve;
     if (strong) {
-      approve = focusable(h('button.btn.danger.hold', null, h('span.fill'), h('span', { style: 'position:relative' }, 'Hold OK to approve')), 'approve', {});
+      approve = focusable(h('button.btn.danger.hold', null, h('span.fill'), h('span', { style: 'position:relative' }, link ? 'Hold OK to link' : 'Hold OK to approve')), 'approve', {});
     } else {
       approve = focusable(h('button.btn.primary', null, 'Approve'), 'approve', { select: () => this.decide(a, true) });
     }
-    const who = a.source === 'agent' ? (a.agent || 'The agent') + ' wants to run:' : 'You asked FireDev to run:';
+    const who = link ? 'Alexa wants to link to FireDev. It should have just told you this code:'
+      : a.source === 'agent' ? (a.agent || 'The agent') + ' wants to run:' : 'You asked FireDev to run:';
     this.approvalEl = h('div.overlay', null, h('div.sheet.approval' + (strong ? '.l3' : ''), null,
-      h('div.eyebrow', null, icon('shield'), strong ? 'Strong confirmation required' : 'Approval required',
-        h('span.tag.l' + a.level, { style: 'margin-left:auto' }, 'Level ' + a.level + ' · ' + a.level_name)),
+      h('div.eyebrow', null, icon('shield'), link ? 'Link a voice assistant' : strong ? 'Strong confirmation required' : 'Approval required',
+        link ? null : h('span.tag.l' + a.level, { style: 'margin-left:auto' }, 'Level ' + a.level + ' · ' + a.level_name)),
       h('div.who', null, who),
       h('div.command', null, a.command),
       h('dl', null,
         h('dt', null, 'Action'), h('dd', null, a.title),
         h('dt', null, 'Reason'), h('dd', null, a.reason || '—'),
         h('dt', null, 'Risk'), h('dd', null, a.risk || '—'),
-        p ? h('dt', null, 'Where') : null, p ? h('dd.muted', null, p.name + ' on ' + p.machine) : null),
+        p && !link ? h('dt', null, 'Where') : null, p && !link ? h('dd.muted', null, p.name + ' on ' + p.machine) : null),
       h('div.buttons', null, reject, approve),
-      h('div.note', null, strong ? 'This can’t be undone. Hold OK on the remote for two seconds to approve.' : 'Nothing runs until you choose. ◁ Back does not approve.')));
+      h('div.note', null, link ? 'Hold OK on the remote for two seconds to link. You can unlink it later with firedev unpair.'
+        : strong ? 'This can’t be undone. Hold OK on the remote for two seconds to approve.' : 'Nothing runs until you choose. ◁ Back does not approve.')));
     return this.approvalEl;
   }
 

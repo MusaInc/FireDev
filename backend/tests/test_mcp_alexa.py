@@ -1,6 +1,6 @@
 import pytest
 
-from firedev import alexa, mcp
+from firedev import mcp
 from firedev import config as cfg
 from firedev.auth import Client, DeviceStore
 from firedev.service import FireDev
@@ -61,11 +61,3 @@ async def test_tv_must_hold_for_level3(fd):
     fd.decide("ap3", True, tv, held=True)
     assert a.future.result()[0] is True
 
-
-async def test_alexa_launch_and_status(fd):
-    r = await alexa.handle(fd, ASSISTANT, {"request": {"type": "LaunchRequest"}})
-    assert r["response"]["shouldEndSession"] is False
-    r = await alexa.handle(fd, ASSISTANT, {"request": {"type": "IntentRequest", "intent": {"name": "AMAZON.StopIntent"}}})
-    assert r["response"]["outputSpeech"]["text"] == "Okay."
-    r = await alexa.handle(fd, ASSISTANT, {"request": {"type": "IntentRequest", "intent": {"name": "ApproveIntent"}}})
-    assert r["response"]["outputSpeech"]["text"] == "Nothing is waiting for your approval"

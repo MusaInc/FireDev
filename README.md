@@ -37,7 +37,7 @@ how you give instructions.
 | MCP server (`/mcp`, `firedev mcp` stdio) | **Working**: unit-tested, and the stdio bridge was exercised against the running service |
 | Claude Code adapter (`claude -p --output-format stream-json`) | **Working**: a real turn through FireDev ran the tests via the helper (`tools/claude_check.py`) |
 | Plain shell adapter | Implemented |
-| Alexa | **Simulated**: a real Alexa Skills Kit endpoint (`/alexa`) and interaction model, driven from the phone page. Not published as a skill (no request-signature check yet), so keep `/alexa` off the internet (see *Running behind HTTPS*) |
+| Alexa skill (`/alexa`, [docs/ALEXA.md](docs/ALEXA.md)) | **Endpoint working and tested**: Alexa request signatures and timestamps verified, accounts linked by holding OK on the TV, tasks answered within Alexa's time limit, progress and results by voice, approvals stay on the TV. **Not yet tried with real Alexa or the Fire TV remote's microphone** (needs the skill created in the Alexa console) |
 | On-device speech on the TV | Used if the device has a recogniser; most Fire TVs don't |
 | Multiple machines in one UI, project setup from the TV, Alexa+ integration | Future |
 
@@ -137,18 +137,15 @@ site, so it needs no domain of its own. Set `server.public_url` to the public ad
 handle /firedev {
 	redir * /firedev/ 308
 }
-handle /firedev/alexa* {
-	respond 404   # no Alexa request-signature check yet
-}
 handle_path /firedev/* {
 	header Permissions-Policy "camera=(), microphone=(self), geolocation=()"   # the phone microphone page
 	reverse_proxy 127.0.0.1:8130
 }
 ```
 
-Behind a proxy the phone page can't reach the simulated Alexa endpoint; drive it from a local browser instead.
 
-Everything else is safe to expose: the API, `/mcp` and `/ws` need a paired token, a new TV only gets a pairing
+Everything is safe to expose: `/alexa` only answers requests Alexa signed for your skill (`server.alexa_skill_id`)
+from an account linked on the TV, the API, `/mcp` and `/ws` need a paired token, a new TV only gets a pairing
 code (at most 16 wait at once, and a code is never reused while live), and only `firedev pair` on the service
 machine turns a code into a token.
 
@@ -161,7 +158,9 @@ machine turns a code into a token.
 - **Remote only**: press ☰ (or *Speak*) and choose a suggested command.
 - **Terminal**: `./firedev say "why is the build failing?"`
 - **MCP**: `./firedev add-assistant "Claude Desktop"` prints a token; run `FIREDEV_TOKEN=… ./firedev mcp` as a stdio MCP server.
-- **Alexa (simulated)**: switch the phone page to *Alexa (simulated)*; it sends real Alexa Skills Kit requests to `/alexa` and speaks the reply.
+- **Alexa**: *"Alexa, ask fire dev why the build is failing"* from the Fire TV remote or any Alexa device on your
+  account, once the skill is set up ([docs/ALEXA.md](docs/ALEXA.md)). The phone page's *Alexa (simulated)* sends the
+  same requests with a FireDev token instead.
 
 Things you can say: *open my Android project · why is the build failing · fix it and run the tests · run the
 tests · build the app · show me what changed · check the logs · deploy the preview · what are you doing · stop ·
@@ -175,9 +174,9 @@ continue · undo that change*. Anything else becomes a task for the coding agent
 ## Tests
 
 ```bash
-cd backend && ../.venv/bin/python -m pytest -q                       # 80 unit tests
+cd backend && ../.venv/bin/python -m pytest -q                       # 120 unit tests
 FIREDEV_TEST_SSH=1 ../.venv/bin/python -m pytest -q                  # + 12 over real SSH/tmux to localhost
-npm run test:e2e                                                     # 12 TV + phone tests driven by remote keys
+npm run test:e2e                                                     # 13 TV, phone and signed-Alexa tests driven by remote keys
 cd tv/android && ./gradlew testDebugUnitTest assembleDebug           # shell tests + APK
 .venv/bin/python tools/demo_flow.py                                  # the whole demo against real Codex
 ```
