@@ -43,13 +43,53 @@ how you give instructions.
 | On-device speech on the TV | Used if the device has a recogniser; most Fire TVs don't |
 | Multiple machines in one UI, project setup from the TV, Alexa+ integration | Future |
 
+## Quick start: your TV, your computer, nothing hosted
+
+FireDev runs on your own machine and the Fire TV connects to it directly. There is no FireDev account, cloud
+service, relay or DNS to set up, and nobody but you hosts anything.
+
+**On your computer** (where your code, Codex and Claude Code live):
+
+```bash
+git clone <this repo> ~/firedev && cd ~/firedev
+tools/setup.sh && tools/install-cli.sh      # venv, TV bundle, `firedev` on PATH, and `firedev init`
+firedev add ~/code/my-app                   # each project you want on the TV (--agent codex|claude|shell)
+firedev serve                               # or `firedev up` to run it in the background
+```
+
+**On the TV**, open FireDev. It works one of two ways:
+
+- **Same Wi-Fi**: the TV lists computers running FireDev (they announce themselves on the LAN). Pick yours; the TV
+  shows a 6-digit code; run `firedev pair <code>` on the computer. The connection is TLS, and the code is derived from
+  the computer's certificate as the TV saw it, so a device in the middle can't get paired.
+- **A server over SSH** (a VPS, a workstation at the office): enter the address and your user name, check the
+  server's fingerprint (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`), and either type your password once (the TV
+  adds its own key to `~/.ssh/authorized_keys` and forgets the password) or scan the TV's key as a QR code and add it
+  yourself. FireDev must be installed on the server (the same three commands, `firedev init --no-lan`); the TV starts
+  it with `firedev up` and gets its own token over SSH.
+
+Away from home with a computer behind a home router: the TV needs either an SSH server it can reach, or your own VPN
+(Tailscale, ZeroTier, WireGuard) so the computer looks local. FireDev has no relay of its own, by design.
+
+Afterwards the TV reconnects by itself: it keeps the machine, the pinned certificate or host key, and its own SSH key
+(in the Android keystore where the TV has one). Home → the connection card changes or forgets the machine.
+
+Inside the TV app everything the interface does goes to `127.0.0.1` relays that the app carries over that TLS or SSH
+connection, live previews included (their own port, their own origin). See [docs/LOCAL_FIRST.md](docs/LOCAL_FIRST.md).
+
+Alexa is optional and bring-your-own (it needs a public HTTPS endpoint you run; see [docs/ALEXA.md](docs/ALEXA.md)). The
+normal way to talk is the TV's own microphone and speech, or the phone page on your Wi-Fi.
+
 ## Requirements
 
 - **Service machine** (laptop or VPS): Python 3.11+, Node 18+ (only to rebuild the TV interface), and SSH access to your dev machine.
 - **Dev machine** (can be the same box): `tmux`, `git`, `bash`, and [Codex CLI](https://github.com/openai/codex) signed in (`codex login`). Optional: Claude Code.
 - **Fire TV** in developer mode (Settings → My Fire TV → Developer options → Install unknown apps / ADB debugging), on a network that can reach the service.
 
-## Setup
+## Setup (a FireDev service that drives other machines over SSH)
+
+The quick start above is the normal setup. This one is for a FireDev service on one machine that works on projects on
+others over SSH (and for the hosted demo deployment).
 
 ```bash
 git clone <this repo> firedev && cd firedev

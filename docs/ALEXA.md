@@ -1,4 +1,10 @@
-# FireDev on Alexa
+# FireDev on Alexa (optional, bring your own)
+
+**You don't need Alexa for FireDev.** The normal way to talk to it is the TV app's own microphone and speech, or the
+phone page on your Wi-Fi. Alexa is an extra for people who want it, and it has a cost the rest of FireDev doesn't:
+Alexa only calls a public HTTPS endpoint, so you need your own skill (in your Amazon developer account) and your own
+FireDev reachable from the internet behind HTTPS. Nothing here is run for you by anyone else, and FireDev works the
+same with this left unset (`server.alexa_skill_id` empty means `/alexa` refuses every request).
 
 Say *"Alexa, ask fire dev why the build is failing"* into the Fire TV remote (or any Alexa device on your
 account). Alexa answers in a sentence; the TV shows the detail. The skill is a custom skill hosted by FireDev

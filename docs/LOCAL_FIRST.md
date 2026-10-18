@@ -58,6 +58,20 @@ What moves where:
 - **Our infrastructure**: none in normal operation. The APK ships through the Appstore. musastudios.co.uk/firedev
   stays up only until the replacement is verified on a real TV, then the Caddy route and service are retired.
 
+## Status (2026-10-19, branch feature/local-first)
+
+| Piece | State |
+|---|---|
+| `machine: local` (no SSH to itself), implicit for projects with no machine | Built; the 12 SSH journeys also pass in local mode |
+| `firedev init` / `add` / `up` / `pair --issue` | Built and tested (clean config, background start in tmux `firedev-service-<port>`) |
+| LAN mode: TLS listeners (API + previews), mDNS `_firedev._tcp`, `/api/info` | Built; tested with real sockets and a real mDNS browser |
+| Pairing codes bound to the certificate (`auth.bound_code`) | Built; a man-in-the-middle's code is refused (tested); the TV computes the same code (Kotlin, tested against Python) |
+| TV app transports: 127.0.0.1 relays over pinned TLS or SSH (sshj), TV Ed25519 key in the Android keystore, host-key pinning, password-once key install, `firedev up` bootstrap, reconnect | Built; JVM tests against a real FireDev and a private sshd (incl. a preview loaded through the SSH-forwarded gateway, SSH drop, changed host key, changed certificate) |
+| Discovery on the TV (NsdManager) and the first-run Connect screen | Built; the interface is tested with the real relays standing in for the WebView (`ShellSim`); **NsdManager itself only on a real TV** |
+| Phone microphone page | LAN mode: served on the computer's LAN address (self-signed, the phone warns once). SSH mode: not available (honest message); the TV's microphone is the way |
+| Alexa | Optional, bring-your-own ([ALEXA.md](ALEXA.md)) |
+| Hosted deployment (musastudios.co.uk/firedev) | Untouched and still working; retire after the Sony TV test |
+
 ## Plan (each step verified before anything is removed)
 
 1. **Service on the user's machine**: `machine: local` (subprocess instead of SSH, same `Remote` interface: run,
