@@ -13,7 +13,7 @@ import string
 import time
 from dataclasses import dataclass, field
 
-from . import intents, risk
+from . import genui, intents, risk, sysagents
 from .auth import Client, DeviceStore
 from .config import Config
 from .events import Bus
@@ -53,9 +53,12 @@ COMMANDS = {
     "list_projects", "open_project", "close_project", "send_agent_task", "run_action", "get_project_status",
     "get_current_task", "get_build_status", "approve_action", "reject_action", "cancel_task", "continue_task",
     "undo_changes", "get_changes", "get_file_diff", "get_output", "voice_command", "voice_link", "get_history", "reset_state",
+    "ui_action", "ui_get", "ui_back", "get_data", "ui_show", "ui_patch",
 }
 READ_ONLY = {"list_projects", "get_project_status", "get_current_task", "get_build_status", "get_changes", "get_file_diff",
-             "get_output", "get_history"}
+             "get_output", "get_history", "ui_get", "get_data"}
+DATA_SOURCES = {"status", "projects", "agents", "history", "approvals", "conversation"}
+AGENTS_POLL = 4.0
 
 
 class FireDev:
@@ -68,6 +71,9 @@ class FireDev:
         self._dirty: set[str] = set()
         self._flush: asyncio.TimerHandle | None = None
         self.focus_project: str | None = None
+        self.agents: list[dict] = []
+        self.agents_updated = 0.0
+        self._agents_task: asyncio.Task | None = None
 
     # --- state pushes ---------------------------------------------------------------------------------------
 
@@ -111,6 +117,12 @@ class FireDev:
         self.approvals[a.id] = a
         item = session.add_activity("approval", "Approval required", detail=command, level=level, status="waiting", task=a.task)
         session.emit("approval_required", a.task, approval=a.to_dict())
+        if kind == "command":
+            who = session.adapter.display if source == "agent" else "FireDev"
+            session.speak(f"{who} needs your approval to {title[0].lower() + title[1:] if title else 'run a command'}. "
+                          f"{'Hold OK' if level >= 3 else 'Press OK'} on the remote to approve, or choose Reject.",
+                          "approval", a.task, force=True)
+            session.add_turn("firedev", f"Waiting for your approval: {title}", kind="approval", task=a.task)
         try:
             ok, note, who = await a.future
         finally:
@@ -148,6 +160,93 @@ class FireDev:
             if a.project == pid and (task_id is None or a.task == task_id) and a.future and not a.future.done():
                 a.future.set_result((False, "The task was stopped", "FireDev"))
 
+    # --- live data for TV screens ------------------------------------------------------------------------------
+
+    def surface_changed(self, session: ProjectSession) -> None:
+        if session.surface and "agents" in genui.binds(session.surface["root"]):
+            self._ensure_agents_polling()
+
+    def history_changed(self, session: ProjectSession) -> None:
+        self.bus.emit("ui_data", session.project.id, None, source="history", data=self.history_series(session.project.id))
+
+    def history_series(self, pid: str) -> dict:
+        tests, builds = [], []
+        for ev in self.bus.history(pid, 600):
+            d = ev.get("data") or {}
+            if ev["type"] == "tests_finished" and d.get("total") is not None:
+                tests.append({"ts": ev["ts"], "passed": d.get("passed"), "failed": d.get("failed"), "total": d.get("total"),
+                              "duration": d.get("duration")})
+            elif ev["type"] == "build_finished" and not d.get("artifact_only") and d.get("state") in ("passed", "failed"):
+                builds.append({"ts": ev["ts"], "state": d["state"], "ok": 1 if d["state"] == "passed" else 0,
+                               "duration": d.get("duration"), "error_count": d.get("error_count", 0)})
+        return {"tests": tests[-40:], "builds": builds[-40:]}
+
+    def firedev_agents(self) -> list[dict]:
+        return [{"agent": s.adapter.display, "project": s.project.name, "firedev_project": s.project.id, "source": "firedev",
+                 "state": s.agent_state["state"] if s.conn_state == "connected" else "offline",
+                 "task": s.current.title if s.current else None, "status_text": s.current.status_text if s.current else None,
+                 "presenter": s.ui_current.title if s.ui_current else None, "machine": s.project.machine.display}
+                for s in self.sessions.values()]
+
+    async def scan_agents(self, prefer: ProjectSession | None = None) -> list[dict]:
+        sessions = ([prefer] if prefer else []) + list(self.sessions.values())
+        live = next((s for s in sessions if s.conn_state == "connected" and s.remote.connected), None)
+        machine: list[dict] = []
+        if live:
+            projects = [{"name": s.project.name, "path_abs": live.remote.expand(s.project.path) if s.project.machine is live.project.machine else None}
+                        for s in self.sessions.values()]
+            try:
+                machine = await sysagents.scan(live.remote, projects)
+            except Exception as e:  # noqa: BLE001
+                log.warning("agent scan failed: %s", e)
+        managed = {a["firedev_project"]: a for a in self.firedev_agents()}
+        for m in machine:
+            f = managed.get(m.get("firedev_project") or "")
+            if f:
+                m.update(task=f["task"], status_text=f["status_text"], managed_by="FireDev")
+        self.agents = self.firedev_agents() + machine
+        self.agents_updated = time.time()
+        return self.agents
+
+    def _ensure_agents_polling(self) -> None:
+        if self._agents_task and not self._agents_task.done():
+            return
+        self._agents_task = asyncio.get_running_loop().create_task(self._poll_agents())
+
+    async def _poll_agents(self) -> None:
+        last = None
+        while any(s.surface and "agents" in genui.binds(s.surface["root"]) for s in self.sessions.values()):
+            data = await self.scan_agents()
+            sig = [(a.get("pid"), a.get("state"), a.get("task"), a.get("status_text")) for a in data]
+            if sig != last:
+                last = sig
+                self.bus.emit("ui_data", None, None, source="agents", data=data, updated=self.agents_updated)
+            await asyncio.sleep(AGENTS_POLL)
+
+    def ui_snapshot(self) -> dict:
+        return {"surfaces": {pid: {"surface": s.surface, "version": s.surface_version} for pid, s in self.sessions.items() if s.surface},
+                "data": {"agents": self.agents, "agents_updated": self.agents_updated,
+                         "history": {pid: self.history_series(pid) for pid in self.sessions}}}
+
+    async def data_for(self, session: ProjectSession, source: str) -> dict | list:
+        if source not in DATA_SOURCES:
+            raise CommandError(f"no data source '{source}' (try: {', '.join(sorted(DATA_SOURCES))})")
+        if source == "agents":
+            data = await self.scan_agents(session)
+            return {"agents": data, "note": "source 'firedev' = FireDev's own project agents; 'machine' = Codex and Claude Code "
+                                           "processes found with ps on " + session.project.machine.display, "updated": self.agents_updated}
+        if source == "projects":
+            return self.home()
+        if source == "history":
+            return {**self.history_series(session.project.id), "note": "Test and build runs FireDev recorded for this project"}
+        if source == "approvals":
+            return {"approvals": self.pending_approvals()}
+        if source == "conversation":
+            return {"conversation": list(session.conversation)}
+        snap = session.snapshot()
+        return {k: snap.get(k) for k in ("id", "name", "machine", "path", "connection", "agent", "task", "last_task", "queue",
+                                         "build", "tests", "deploy", "changes", "approvals", "surface")}
+
     # --- commands -------------------------------------------------------------------------------------------
 
     async def execute(self, name: str, args: dict, client: Client) -> dict:
@@ -173,6 +272,9 @@ class FireDev:
         if s.agent_state["state"] == "unavailable":
             return {"ok": True, "project": s.project.id,
                     "message": f"Connected to {s.project.machine.display}, but {s.adapter.display} isn't installed there."}
+        if args.get("conversational"):
+            return {"ok": True, "project": s.project.id,
+                    "message": f"{s.project.name} is open, and {s.adapter.display} is ready. What would you like to work on?"}
         return {"ok": True, "project": s.project.id, "message": f"Connected to {s.project.machine.display}. {s.adapter.display} is ready."}
 
     async def _cmd_close_project(self, args, client):
@@ -194,7 +296,7 @@ class FireDev:
         if s.adapter.id == "shell":
             raise CommandError("This project has no AI agent. Say 'run the tests' or 'build the app'.")
         task = s.submit(Task(id=_rid("t"), title=args.get("title") or intents._title(text), kind="agent", text=args.get("text") or text,
-                             prompt=text, mode=args.get("mode", "change"), source=args.get("source") or client.role))
+                             prompt=text, mode=args.get("mode") or "change", source=args.get("source") or client.role, ui=args.get("ui")))
         busy = len(s.pending) > 1 or (s.current is not None and s.current is not task)
         return {"ok": True, "task": task.id, "queued": busy,
                 "message": (f"Queued for {s.adapter.display}." if busy else f"Asking {s.adapter.display}.")}
@@ -275,6 +377,86 @@ class FireDev:
         s = self.session(args.get("project"))
         return {"ok": True, "events": self.bus.history(s.project.id, int(args.get("limit", 200)))}
 
+    async def _cmd_ui_get(self, args, client):
+        s = self.session(args.get("project"))
+        return {"ok": True, "surface": s.surface, "version": s.surface_version}
+
+    async def _cmd_get_data(self, args, client):
+        source = args.get("source")
+        if source == "agents":
+            return {"ok": True, "data": await self.scan_agents(), "updated": self.agents_updated}
+        if source == "history":
+            s = self.session(args.get("project"))
+            return {"ok": True, "data": self.history_series(s.project.id)}
+        raise CommandError("Unknown data source")
+
+    async def _cmd_ui_show(self, args, client):
+        """The CLI's way to put a screen on the TV (an agent uses the helper's `firedev ui show`)."""
+        if client.role != "admin":
+            raise CommandError("Only the FireDev CLI can show screens directly")
+        s = self.session(args.get("project"))
+        try:
+            clean = s.show_surface(args.get("surface"), "cli")
+        except genui.SpecError as e:
+            return {"ok": False, "message": "The screen was refused", "errors": e.errors}
+        return {"ok": True, "version": s.surface_version, "title": clean["title"]}
+
+    async def _cmd_ui_patch(self, args, client):
+        if client.role != "admin":
+            raise CommandError("Only the FireDev CLI can change screens directly")
+        s = self.session(args.get("project"))
+        try:
+            changed = s.patch_surface(args.get("ops"), "cli")
+        except genui.SpecError as e:
+            return {"ok": False, "message": "The patch was refused", "errors": e.errors}
+        return {"ok": True, "version": s.surface_version, "changed": changed}
+
+    async def _cmd_ui_back(self, args, client):
+        s = self.session(args.get("project"))
+        return {"ok": s.surface_back(), "version": s.surface_version}
+
+    async def _cmd_ui_action(self, args, client):
+        """An interaction with a generated screen. The action that runs is the one the server holds for that
+        component, never one supplied by the client, and only from the allowlist; risky actions still need approval."""
+        if client.role not in ("tv", "admin"):
+            raise CommandError("Only the TV can use what's on screen")
+        s = self.session(args.get("project"))
+        if not s.surface:
+            raise CommandError("Nothing is on screen")
+        node, _ = genui.find(s.surface["root"], str(args.get("node", "")))
+        if node is None:
+            raise CommandError("That part of the screen has changed. Try again.")
+        action = node.get("action")
+        if args.get("item") is not None:
+            items = node.get("items") if isinstance(node.get("items"), list) else []
+            i = int(args["item"])
+            action = items[i].get("action") if 0 <= i < len(items) and isinstance(items[i], dict) else None
+        if node.get("type") == "choice":
+            opts = node.get("options") or []
+            i = int(args.get("option", -1))
+            if not 0 <= i < len(opts):
+                raise CommandError("Pick one of the options")
+            o = opts[i]
+            action = {"type": "ask", "text": (f"{node['prompt']} " if node.get("prompt") else "") + f"My choice: {o.get('value') or o['label']}"}
+        elif node.get("type") == "form":
+            action = {"type": "ask", "text": _form_text(node, args.get("values") or {})}
+        if not action:
+            raise CommandError("Nothing happens there")
+        t = action["type"]
+        pid = s.project.id
+        if t == "ask":
+            return await self.voice(action["text"], client, source="tv", project=pid, ui={"focused": node.get("id"), "version": s.surface_version})
+        if t == "run_action":
+            return await self._cmd_run_action({"project": pid, "action": action["action"], "source": "tv"}, client)
+        if t == "cancel_task":
+            if not args.get("confirmed"):
+                raise CommandError("Confirm on the TV first")
+            return await self._cmd_cancel_task({"project": pid}, client)
+        if t == "open_project":
+            return await self._cmd_open_project({"project": action["project"]}, client)
+        # Everything else (navigate, open a diff or output, tabs, expand, previews, approvals) happens on the TV itself.
+        return {"ok": True, "client_action": action}
+
     async def _cmd_reset_state(self, args, client):
         if client.role != "admin":
             raise CommandError("Only the FireDev CLI can reset a project")
@@ -292,40 +474,105 @@ class FireDev:
     # --- voice ----------------------------------------------------------------------------------------------
 
     async def _cmd_voice_command(self, args, client):
-        return await self.voice(args.get("text", ""), client, source=args.get("source") or client.role, project=args.get("project"))
+        return await self.voice(args.get("text", ""), client, source=args.get("source") or client.role, project=args.get("project"),
+                                ui=args.get("ui"))
 
     def _context(self, pid: str | None) -> dict:
         if not pid or pid not in self.sessions:
             return {"project": None, "pending_approval": bool(self.approvals)}
         s = self.sessions[pid]
-        return {"project": pid, "agent": s.adapter.display,
+        return {"project": pid, "agent": s.adapter.display, "busy": s.busy, "has_surface": bool(s.surface),
                 "actions": {a.id: {"kind": a.kind, "title": a.title} for a in s.project.actions.values()},
                 "last_build_failed": s.build.get("state") == "failed", "last_tests_failed": s.tests.get("state") == "failed",
                 "pending_approval": any(a.project == pid for a in self.approvals.values())}
 
-    async def voice(self, text: str, client: Client, source: str = "voice", project: str | None = None) -> dict:
+    async def voice(self, text: str, client: Client, source: str = "voice", project: str | None = None, ui: dict | None = None) -> dict:
         pid = project or self.focus_project
         intent = intents.parse(text, [s.summary() for s in self.sessions.values()], self._context(pid))
+        if intent.args.get("any_project") and not pid:
+            pid = self._default_project()
         self.bus.emit("voice_command", pid, None, text=text, intent=intent.to_dict(), source=source,
                       agent=self.sessions[pid].adapter.display if pid in self.sessions else None)
+        if pid in self.sessions:
+            self.sessions[pid].add_turn("user", text, kind="request", source=source)
         try:
-            result = await self._run_intent(intent, client, source, pid)
+            result = await self._run_intent(intent, client, source, pid, ui)
         except CommandError as e:
             result = {"ok": False, "message": str(e)}
-        self.bus.emit("voice_reply", pid, None, text=text, intent=intent.name, reply=result.get("message"), ok=result.get("ok", True))
+        except genui.SpecError as e:
+            result = {"ok": False, "message": f"I couldn't change the screen: {e}"}
+        reply = result.get("message")
+        self.bus.emit("voice_reply", pid, None, text=text, intent=intent.name, reply=reply, ok=result.get("ok", True),
+                      navigate=result.get("navigate"), speech=result.get("speech"), listen=result.get("listen"),
+                      client_action=result.get("client_action"))
+        # FireDev's own short answers are spoken too (as FireDev, not as the agent). Agent tasks are answered by the
+        # agent itself when its turn ends; only a queued one gets a word now so the user knows it was heard.
+        if reply and result.get("speak", True) and (intent.name != "send_agent_task" or result.get("queued") or not result.get("ok", True)):
+            self.say(pid, reply)
+        if reply and pid in self.sessions and intent.name != "send_agent_task":
+            self.sessions[pid].add_turn("firedev", reply, kind="reply")
         return {"intent": intent.to_dict(), **result}
 
-    async def _run_intent(self, intent: intents.Intent, client: Client, source: str, pid: str | None) -> dict:
+    def say(self, pid: str | None, text: str) -> None:
+        if pid in self.sessions:
+            s = self.sessions[pid]
+            s.bus.emit("agent_speech", pid, None, id=_rid("s"), text=text, kind="firedev", agent="FireDev")
+        else:
+            self.bus.emit("agent_speech", None, None, id=_rid("s"), text=text, kind="firedev", agent="FireDev")
+
+    def _default_project(self) -> str | None:
+        connected = [s for s in self.sessions.values() if s.conn_state == "connected"]
+        return (connected or list(self.sessions.values()) or [None])[0].project.id if (connected or self.sessions) else None
+
+    async def _run_intent(self, intent: intents.Intent, client: Client, source: str, pid: str | None, ui: dict | None = None) -> dict:
         n, a = intent.name, intent.args
+        if n in ("ui_edit", "ui_back") and pid in self.sessions:
+            s = self.sessions[pid]
+            if n == "ui_back":
+                return {"ok": True, "message": "Here's the previous screen." if s.surface_back() else "There's no earlier screen.",
+                        "navigate": "surface"}
+            if s.surface and a.get("op"):
+                quick = genui.quick_edit(s.surface, a["op"], (ui or {}).get("focused"), a.get("target"), a.get("kind"))
+                if quick:
+                    ops, msg = quick
+                    if ops:
+                        s.patch_surface(ops, "voice")
+                    return {"ok": True, "message": msg, "navigate": "surface"}
+                if a["op"] in ("expand", "collapse"):
+                    # Probably a card the TV draws from live data (an agent, an approval): the TV finds it by name.
+                    return {"ok": True, "message": "", "navigate": "surface", "speak": False,
+                            "client_action": {"type": "expand_text", "text": a.get("target") or "", "op": a["op"]}}
+            if not s.surface:
+                return {"ok": False, "message": "There's nothing on screen to change yet. Ask me to show you something."}
+            await self._ensure_open(s)
+            task = s.submit(Task(id=_rid("t"), title=intent.title, kind="agent", text=a.get("task") or intent.title,
+                                 prompt=a.get("task") or intent.title, mode="ui_edit", source=source, lane="ui", ui=ui))
+            return {"ok": True, "task": task.id, "message": "Changing the screen.", "navigate": "surface", "speak": False}
+        if n == "navigate":
+            return {"ok": True, "message": "", "navigate": a["to"], "speak": False}
+        if n in ("speech_stop", "conversation_end"):
+            return {"ok": True, "message": "Okay." if n == "conversation_end" else "", "speech": "stop",
+                    "listen": "off" if n == "conversation_end" else None, "speak": n == "conversation_end"}
         if n == "open_project":
-            res = await self._cmd_open_project({"project": a["project"]}, client)
+            res = await self._cmd_open_project({"project": a["project"], "conversational": not a.get("then")}, client)
             if res.get("ok") and a.get("then"):
                 follow = await self.voice(a["then"], client, source, a["project"])
                 res["message"] = f"{res['message']} {follow.get('message', '')}".strip()
             return res
         if n == "send_agent_task":
-            return await self._cmd_send_agent_task({"project": pid, "task": a["task"], "title": intent.title, "mode": a.get("mode"),
-                                                    "source": source, "text": a.get("text")}, client)
+            if a.get("lane") == "ui":
+                s = self.session(pid)
+                await self._ensure_open(s)
+                task = s.submit(Task(id=_rid("t"), title=intent.title, kind="agent", text=a["task"], prompt=a["task"],
+                                     mode=a.get("mode") or "present", source=source, lane="ui", ui=ui))
+                return {"ok": True, "task": task.id, "message": "Putting it on screen.", "navigate": "surface", "speak": False}
+            res = await self._cmd_send_agent_task({"project": pid, "task": a["task"], "title": intent.title, "mode": a.get("mode"),
+                                                   "source": source, "text": a.get("text"), "ui": ui}, client)
+            if res.get("queued"):
+                s = self.session(pid)
+                cur = s.current.title.lower() if s.current else "the current task"
+                res["message"] = f"I'll do that next, after {cur}."
+            return res
         if n == "run_action":
             return await self._cmd_run_action({"project": pid, "action": a["action"], "source": source}, client)
         if n == "cancel_task":
@@ -380,3 +627,24 @@ def spoken_status(snap: dict) -> str:
     if snap.get("approvals"):
         parts.append("Something is waiting for your approval on the TV.")
     return " ".join(p.strip() for p in parts if p.strip())
+
+
+def _form_text(node: dict, values: dict) -> str:
+    parts = []
+    for f in node.get("fields") or []:
+        v = values.get(f["key"], f.get("value"))
+        if f["kind"] == "choice" and f.get("options") and v not in f["options"]:
+            raise CommandError(f"{f['label']}: choose one of the options")
+        if f["kind"] == "toggle":
+            v = "yes" if v in (True, "yes", "on", 1) else "no"
+        if f["kind"] == "number":
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                raise CommandError(f"{f['label']} must be a number") from None
+            if ("min" in f and v < f["min"]) or ("max" in f and v > f["max"]):
+                raise CommandError(f"{f['label']} is out of range")
+            v = int(v) if v == int(v) else v
+        parts.append(f"{f['label']}: {v}")
+    head = node.get("prompt") or node.get("title") or "My answers"
+    return f"{head} — " + "; ".join(parts)

@@ -4,6 +4,10 @@
 #   firedev actions                                   list the project's actions
 #   firedev run <action>                              run a declared action (tests, build, ...)
 #   firedev request --reason "<why>" -- <command...>  ask the user to approve a command on the TV
+#   firedev ui show|patch [file]                      put a screen on the TV, or change it (JSON on stdin or in file)
+#   firedev ui current [--json] | firedev ui help     what the TV shows now | the screen format
+#   firedev say "<sentence>"                          speak a short progress update on the TV
+#   firedev data status|projects|agents|history|approvals|conversation   real FireDev data as JSON
 #
 # The helper never runs anything itself. It drops a request into the project's FireDev queue; the FireDev
 # service picks it up, checks the risk level itself, asks for approval on the TV when needed, runs the
@@ -22,7 +26,7 @@ json_escape() {
   printf '%s' "$s"
 }
 
-usage() { sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 [ $# -ge 1 ] || usage
 cmd=$1; shift
@@ -47,6 +51,24 @@ case "$cmd" in
     [ $# -ge 1 ] || die 'usage: firedev request --reason "<why>" -- <command...>'
     [ -n "$reason" ] || die "say why with --reason; the user reads it on the TV"
     type=command; action=""; command="$*" ;;
+  ui)
+    sub=${1:-help}; shift || true
+    case "$sub" in
+      help|--help|-h)
+        guide="$(dirname "$0")/firedev-ui-guide.txt"
+        [ -f "$guide" ] && cat "$guide" || echo "The screen guide is missing; reconnect FireDev."
+        exit 0 ;;
+      show|patch) type=ui; action=$sub; payload_from=${1:--} ;;
+      current) type=ui; action=current; payload_from=""; [ "${1:-}" = "--json" ] && action=current-json ;;
+      *) die "usage: firedev ui show|patch|current|help" ;;
+    esac
+    command=""; reason="" ;;
+  say)
+    [ $# -ge 1 ] || die 'usage: firedev say "<one short sentence>"'
+    type=say; action=""; command="$*"; reason="" ;;
+  data)
+    [ $# -ge 1 ] || die "usage: firedev data status|projects|agents|history|approvals|conversation"
+    type=data; action=$1; command=""; reason="" ;;
   -h|--help|help) usage ;;
   *) die "unknown command '$cmd' (try: firedev actions)" ;;
 esac
@@ -56,11 +78,33 @@ mkdir -p "$QUEUE" || die "cannot write to $QUEUE"
 
 id="r$(date +%s)$RANDOM$RANDOM"
 tmp="$QUEUE/.$id.tmp"
+if [ "$type" = ui ] && [ -n "${payload_from:-}" ]; then
+  if [ "$payload_from" = "-" ]; then cat > "$QUEUE/.$id.json"; else cat -- "$payload_from" > "$QUEUE/.$id.json" || die "cannot read $payload_from"; fi
+  [ -s "$QUEUE/.$id.json" ] || die "no JSON given (pipe it in or name a file)"
+  [ "$(wc -c < "$QUEUE/.$id.json")" -le 200000 ] || die "that screen is too large"
+  mv "$QUEUE/.$id.json" "$QUEUE/$id.json"
+fi
 printf '{"id":"%s","type":"%s","action":"%s","command":"%s","reason":"%s","cwd":"%s"}\n' \
   "$id" "$type" "$(json_escape "$action")" "$(json_escape "$command")" "$(json_escape "$reason")" "$(json_escape "$PWD")" > "$tmp"
 mv "$tmp" "$QUEUE/$id.req"
 
 state_file="$QUEUE/$id.state"
+
+# ui, say and data are answered by FireDev itself: print its answer and exit.
+if [ "$type" = ui ] || [ "$type" = say ] || [ "$type" = data ]; then
+  deadline=$(( $(date +%s) + 60 ))
+  while :; do
+    if [ -f "$state_file" ]; then
+      read -r state rest < "$state_file" || true
+      case "$state" in
+        done) [ -f "$QUEUE/$id.out" ] && cat "$QUEUE/$id.out"; [ -n "$rest" ] && echo "$rest"; rm -f "$QUEUE/$id".*; exit 0 ;;
+        error) [ -f "$QUEUE/$id.out" ] && cat "$QUEUE/$id.out" >&2; echo "FireDev refused this: $rest" >&2; rm -f "$QUEUE/$id".*; exit 4 ;;
+      esac
+    fi
+    if [ "$(date +%s)" -ge "$deadline" ]; then echo "FireDev didn't answer; is it connected?" >&2; exit 4; fi
+    sleep 0.2
+  done
+fi
 announced=""
 deadline=$(( $(date +%s) + WAIT_SECONDS ))
 run_dir=""

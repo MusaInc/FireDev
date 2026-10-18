@@ -23,13 +23,18 @@ class ClaudeAdapter(AgentAdapter):
     display = "Claude Code"
     binary = "claude"
 
-    def turn_command(self, prompt_file: str, thread_id: str | None, cwd: str, home: str) -> str:
+    def turn_command(self, prompt_file: str, thread_id: str | None, cwd: str, home: str, ephemeral: bool = False,
+                     effort: str | None = None) -> str:
         tools = list(self.options.get("allowed_tools", ALLOWED_TOOLS))
         tools.append(f"Bash({home}/.firedev/bin/firedev:*)")  # the prompt names the helper by absolute path
         args = [self.binary, "-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits",
                 "--allowedTools", ",".join(tools)]
-        if thread_id:
+        if thread_id and not ephemeral:
             args += ["--resume", thread_id]
+        if ephemeral:
+            args += ["--no-session-persistence"]
+        if effort or self.options.get("effort"):
+            args += ["--effort", str(effort or self.options["effort"])]
         if self.options.get("model"):
             args += ["--model", str(self.options["model"])]
         return f"cd {shlex.quote(cwd)} && " + " ".join(shlex.quote(a) for a in args) + f" < {shlex.quote(prompt_file)}"

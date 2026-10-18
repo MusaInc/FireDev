@@ -27,13 +27,14 @@ export class WorkspaceScreen {
     this.chips = h('div', { style: 'display:flex;gap:20px;align-items:center' });
     this.speak = focusable(h('button.btn.small', null, icon('mic'), 'Speak', h('span.key', null, '☰')), 'speak', { select: () => app.overlays.openVoice() });
     this.stop = focusable(h('button.btn.small.danger', null, 'Stop'), 'stop', { select: () => app.command('cancel_task', { project: this.pid }) });
+    this.screenBtn = focusable(h('button.btn.small', null, icon('agent'), 'Screen'), 'screen', { select: () => app.go('surface', this.pid) });
     this.taskCard = focusable(h('div.card.task-card'), 'task', { select: () => app.navigate('activity', { project: this.pid }) });
     this.buildTile = focusable(h('div.tile'), 'build', { select: () => app.overlays.openDetail('build', this.pid) });
     this.testsTile = focusable(h('div.tile'), 'tests', { select: () => app.overlays.openDetail('tests', this.pid) });
     this.changesTile = focusable(h('div.tile'), 'changes', { select: () => app.navigate('diff', { project: this.pid }) });
     this.cmd = focusable(h('div.cmd-strip'), 'command', { select: () => this.openLastOutput() });
     this.el = h('section.screen.workspace', null,
-      h('div.topbar', null, this.head, this.chips, this.stop, this.speak),
+      h('div.topbar', null, this.head, this.chips, this.stop, this.screenBtn, this.speak),
       h('div.ws', null, this.taskCard, h('div.side', null, this.buildTile, this.testsTile, this.changesTile), this.cmd));
     this.sigs = {};
   }
@@ -60,6 +61,7 @@ export class WorkspaceScreen {
       clear(this.chips).append(connPill(app, p), agentPill(p));
     }
     this.stop.style.display = p.task ? '' : 'none';
+    this.screenBtn.style.display = app.ui.surfaces[this.pid] ? '' : 'none';
     this.renderTask(p);
     this.renderBuild(p);
     this.renderTests(p);

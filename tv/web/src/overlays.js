@@ -220,6 +220,21 @@ export class Overlays {
   voiceEvent(ev) {
     const d = ev.data || {};
     if (this.approval && ev.type !== 'voice_reply') return;
+    // In a spoken conversation on the TV the dock (or the screen's rail) shows this instead of the sheet.
+    if (this.app.voice.active && (!d.source || d.source === 'tv') && !this.isOpen('voice')) {
+      if (ev.type === 'voice_reply') {
+        if (d.intent && ['show_changes', 'show_activity', 'go_home'].indexOf(d.intent) >= 0) this.navigateFor(d.intent);
+        if (d.intent === 'approve_action') this.focusApprove();
+      }
+      if (ev.type === 'voice_command') {
+        const it = d.intent || {};
+        if (it.name === 'open_project' && it.args && it.args.project && this.app.route.project !== it.args.project) {
+          this.app.focusProject = it.args.project;
+          this.app.navigate('workspace', { project: it.args.project });
+        }
+      }
+      return;
+    }
     clearTimeout(this.voiceTimer);
     if (ev.type === 'voice_listening') {
       if (!d.active) { if (this.voice && this.voice.mode !== 'menu') this.close('voice'); return; }
@@ -432,6 +447,25 @@ export class Overlays {
       clear(url).append(r.result.url.replace(/#t=.*/, '#t=…'));
       img.src = base + '/api/qr.svg?token=' + encodeURIComponent(app.link.token || '') + '&data=' + encodeURIComponent(r.result.url);
     });
+  }
+
+  confirm(title, body, okLabel, onOk) {
+    const el = h('div.overlay', null, h('div.sheet.detail', { style: 'width:1100px' },
+      h('div.t-title', null, title),
+      h('div.t-body.muted', { style: 'margin-top:20px' }, body),
+      h('div', { style: 'display:flex;gap:24px;margin-top:44px' },
+        focusable(h('button.btn', null, 'Cancel'), 'cancel', { select: () => this.close('confirm') }),
+        focusable(h('button.btn.danger', null, okLabel), 'ok', { select: () => { this.close('confirm'); onOk(); } }))));
+    this.open('confirm', el, { initial: 'cancel' });
+  }
+
+  /** A preview from a generated screen, full size. Only addresses the service allowed reach here. */
+  openPreview(url) {
+    const frame = h('iframe', { src: url, tabindex: '-1', sandbox: 'allow-scripts allow-same-origin', style: 'width:1600px;height:900px;border:0;border-radius:24px;background:#fff' });
+    const el = h('div.overlay', null, h('div.sheet.detail', { style: 'width:1720px;height:1010px;padding:36px 60px' },
+      h('div', { style: 'display:flex;align-items:center;gap:24px;margin-bottom:20px' }, h('div.t-meta.clip', { style: 'flex:1' }, url),
+        focusable(h('button.btn.small', null, 'Close'), 'close', { select: () => this.close('preview') })), frame));
+    this.open('preview', el, { initial: 'close' });
   }
 
   confirmExit() {

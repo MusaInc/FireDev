@@ -1,0 +1,23 @@
+{"schema":"firedev.ui/1","title":"Fixture App health","subtitle":"Tests, build and the agent, live",
+ "provenance":{"kind":"mixed","sources":["FireDev test runs","fixture notes"]},
+ "speak":"Here is the health of the fixture app.",
+ "root":{"type":"grid","id":"grid","columns":3,"children":[
+  {"type":"metric","id":"passed","label":"Tests passing","value":{"$bind":"project.tests.passed","fallback":"—"},"tone":"good"},
+  {"type":"metric","id":"failed","label":"Tests failing","value":{"$bind":"project.tests.failed","fallback":"—"},"tone":"bad"},
+  {"type":"metric","id":"files","label":"Files changed","value":{"$bind":"project.changes.files","format":"count"},"caption":"Working tree vs HEAD"},
+  {"type":"chart","id":"trend","kind":"line","size":"l","title":"Passing tests per run","views":["line","bar","area"],
+   "series":[{"name":"Passed","tone":"good","points":{"$bind":"history.tests","x":"ts","y":"passed"}},{"name":"Failed","tone":"bad","points":{"$bind":"history.tests","x":"ts","y":"failed"}}]},
+  {"type":"card","id":"cause","title":"Why the app was broken","subtitle":"src/app.txt said “broken”","detail":"The fixture's tests read src/app.txt and fail unless it says fixed. The agent rewrote the file and the third test passed.","expandable":true,"icon":"code"},
+  {"type":"tabs","id":"tabs","size":"xl","children":[
+    {"type":"tab","id":"tab-arch","label":"Architecture","children":[
+      {"type":"graph","id":"arch","title":"How a voice request reaches the agent","direction":"right","nodes":[
+        {"id":"tv","label":"Fire TV","group":"WebView app","icon":"mic"},{"id":"svc","label":"FireDev service","group":"FastAPI"},
+        {"id":"ssh","label":"SSH + tmux","group":"dev machine","icon":"terminal"},{"id":"agent","label":"Codex","group":"sandboxed","icon":"agent","tone":"info"},
+        {"id":"q","label":"Request queue","group":"firedev run / request"},{"id":"ap","label":"Approval on TV","group":"level 2-3","icon":"shield","tone":"warn"}],
+       "edges":[{"from":"tv","to":"svc","label":"WebSocket"},{"from":"svc","to":"ssh"},{"from":"ssh","to":"agent"},{"from":"agent","to":"q"},{"from":"q","to":"ap","style":"dashed"},{"from":"ap","to":"svc","style":"dashed"}]}]},
+    {"type":"tab","id":"tab-agents","label":"Agents","children":[{"type":"agent_status","id":"agents","source":"project","title":"This project's agent"}]},
+    {"type":"tab","id":"tab-steps","label":"Timeline","children":[
+      {"type":"timeline","id":"steps","items":[{"title":"Read src/app.txt","status":"done"},{"title":"Ran the tests: 2 of 3 passed","status":"done"},{"title":"Rewrote src/app.txt","status":"done"},{"title":"Tests again","status":"running","detail":"firedev run test"}]}]}]},
+  {"type":"choice","id":"next","size":"l","prompt":"What next?","options":[{"label":"Run the tests","value":"Run the tests"},{"label":"Build the app","value":"Build the app"}]},
+  {"type":"table","id":"tbl","title":"Example release targets","example":true,"columns":[{"key":"name","label":"Target"},{"key":"state","label":"State"}],"rows":[{"name":"Fire TV","state":"ready"},{"name":"Web","state":"draft"}]}
+ ]}}

@@ -122,7 +122,8 @@
       if (msg.type === 'approval_required') { approvals++; render(); }
       if (msg.type === 'approval_accepted' || msg.type === 'approval_rejected') { approvals = Math.max(0, approvals - 1); render(); }
       if (msg.type === 'voice_command' && msg.project) focus = msg.project;
-      if (msg.type === 'voice_reply') reply(msg.data.reply, msg.data.ok);
+      if (msg.type === 'voice_reply' && msg.data.reply) reply(msg.data.reply, msg.data.ok);
+      if (msg.type === 'agent_speech') reply((msg.data.agent || 'FireDev') + ': ' + msg.data.text, true);
       if (msg.type === 'reply' && !msg.ok) reply(msg.error, false);
     };
   }

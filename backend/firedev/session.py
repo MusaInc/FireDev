@@ -22,8 +22,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from . import parsers, risk
+from . import genui, parsers, risk
 from .agents import make_adapter
+from .agents.base import BRIEF_VERSION
+from .speech import clean_for_speech, spoken_text
 from .config import Action, Project
 from .ssh import Remote, RemoteError
 
@@ -33,8 +35,12 @@ if TYPE_CHECKING:
 log = logging.getLogger("firedev.session")
 
 HELPERS = Path(__file__).resolve().parents[2] / "remote" / "bin"
+UI_GUIDE = HELPERS / "firedev-ui-guide.txt"
 TAIL_BYTES = 48_000
 ACTIVITY_LIMIT = 160
+SURFACE_HISTORY = 8
+PROGRESS_GAP = 6.0  # seconds between spoken progress lines
+ACK_AFTER = 1.5  # an agent's first message is spoken as its acknowledgement if the turn is still going this long after
 
 
 def _rid(prefix: str) -> str:
@@ -64,6 +70,8 @@ class Run:
     pending_output: str = ""
     last_output_emit: float = 0.0
     activity_id: str | None = None
+    lane: str = "main"  # main: the coding conversation; ui: the presenter
+    messages: int = 0
 
     def output(self) -> str:
         return "".join(self.tail)[-TAIL_BYTES:]
@@ -93,13 +101,16 @@ class Task:
     files: dict = field(default_factory=dict)
     agent_error: str | None = None
     cancelled: bool = False
+    lane: str = "main"
+    ui: dict | None = None  # what the TV showed when the request was made: {surface, version, focused}
+    spoke: bool = False  # the agent has already said something out loud during this task
 
     def to_dict(self) -> dict:
         return {
             "id": self.id, "title": self.title, "kind": self.kind, "text": self.text, "mode": self.mode, "source": self.source,
             "status": self.status, "created": self.created, "started": self.started, "finished": self.finished,
             "summary": self.summary, "error": self.error, "status_text": self.status_text, "plan": self.plan,
-            "files": [{"path": p, "change": c} for p, c in self.files.items()], "action": self.action_id,
+            "files": [{"path": p, "change": c} for p, c in self.files.items()], "action": self.action_id, "lane": self.lane,
             "elapsed": round((self.finished or time.time()) - self.started, 1) if self.started else 0,
         }
 
@@ -132,6 +143,16 @@ class ProjectSession:
         self.raw: dict[str, str] = {}
         self.last_agent_task: Task | None = None
         self._wake = asyncio.Event()
+        # The presenter lane: short turns that build or change TV screens while the main conversation works.
+        self.ui_pending: deque[Task] = deque()
+        self.ui_current: Task | None = None
+        self._ui_wake = asyncio.Event()
+        self.surface: dict | None = None
+        self.surface_version = 0
+        self.surface_stack: list[dict] = []
+        self.conversation: deque[dict] = deque(maxlen=80)
+        self._last_speech: tuple[float, str] = (0.0, "")
+        self._load_surface()
         self._bg: set[asyncio.Task] = set()
         self._opening: asyncio.Task | None = None
         self._closed = False
@@ -164,6 +185,113 @@ class ProjectSession:
                 item.update(changes)
                 self.service.state_changed(self.project.id)
                 return
+
+    # --- conversation and speech --------------------------------------------------------------------------
+
+    def add_turn(self, role: str, text: str, *, kind: str = "message", task: str | None = None, source: str | None = None) -> dict:
+        """role: user | agent | firedev. The conversation the TV shows next to the screen."""
+        turn = {"id": _rid("c"), "ts": time.time(), "role": role, "text": (text or "").strip()[:1200], "kind": kind,
+                "task": task, "source": source}
+        if turn["text"]:
+            self.conversation.append(turn)
+            self.service.state_changed(self.project.id)
+        return turn
+
+    def speak(self, text: str, kind: str = "reply", task_id: str | None = None, *, force: bool = False) -> bool:
+        """Asks the TV to say something. Progress lines are rate-limited and never repeated; replies always speak."""
+        text = clean_for_speech(text)
+        if not text:
+            return False
+        now = time.time()
+        last_ts, last_text = self._last_speech
+        if kind == "progress" and not force:
+            if text == last_text and now - last_ts < 60:
+                return False
+            if now - last_ts < PROGRESS_GAP:
+                return False
+        self._last_speech = (now, text)
+        self.bus.emit("agent_speech", self.project.id, task_id, id=_rid("s"), text=text, kind=kind, agent=self.adapter.display)
+        return True
+
+    # --- screens (generative UI) ---------------------------------------------------------------------------
+
+    def _surface_file(self) -> Path:
+        return self.service.config.settings.data_dir / "ui" / f"{self.project.id}.json"
+
+    def _load_surface(self) -> None:
+        try:
+            data = json.loads(self._surface_file().read_text())
+            self.surface = genui.validate_surface(data["surface"])
+            self.surface_version = int(data.get("version", 1))
+        except (OSError, ValueError, KeyError, TypeError):
+            self.surface, self.surface_version = None, 0
+
+    def _save_surface(self) -> None:
+        f = self._surface_file()
+        try:
+            f.parent.mkdir(parents=True, exist_ok=True)
+            tmp = f.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"surface": self.surface, "version": self.surface_version}))
+            tmp.replace(f)
+        except OSError:
+            log.warning("could not cache the TV screen for %s", self.project.id)
+
+    def preview_origins(self) -> list[str]:
+        out = list(self.project.previews)
+        if self.deploy.get("url"):
+            out.append(self.deploy["url"])
+        if self.service.config.settings.public_url:
+            out.append(self.service.config.settings.public_url.rstrip("/") + "/")
+        return out
+
+    def show_surface(self, spec, source: str = "agent", task_id: str | None = None) -> dict:
+        clean = genui.validate_surface(spec, self.preview_origins())
+        if self.surface:
+            self.surface_stack.append(self.surface)
+            del self.surface_stack[:-SURFACE_HISTORY]
+        self.surface = clean
+        self.surface_version += 1
+        self._save_surface()
+        self.bus.emit("ui_surface", self.project.id, task_id, surface=clean, version=self.surface_version, source=source)
+        self.service.surface_changed(self)
+        self.service.state_changed(self.project.id)
+        if clean.get("speak"):
+            self.speak(clean["speak"], "progress", task_id, force=True)
+        return clean
+
+    def patch_surface(self, ops, source: str = "agent", task_id: str | None = None) -> list[str]:
+        if not self.surface:
+            raise genui.SpecError(["nothing is on the TV yet: use `firedev ui show` first"])
+        clean, changed = genui.apply_patch(self.surface, ops, self.preview_origins())
+        ops_list = ops["ops"] if isinstance(ops, dict) else ops
+        base = self.surface_version
+        self.surface = clean
+        self.surface_version += 1
+        self._save_surface()
+        # The TV applies the same operations to its copy; the full surface rides along so a TV that missed a
+        # version can catch up without another round trip.
+        self.bus.emit("ui_patch", self.project.id, task_id, ops=ops_list, changed=changed, base=base, version=self.surface_version,
+                      surface=clean, source=source)
+        self.service.surface_changed(self)
+        self.service.state_changed(self.project.id)
+        return changed
+
+    def surface_back(self) -> bool:
+        if not self.surface_stack:
+            return False
+        self.surface = self.surface_stack.pop()
+        self.surface_version += 1
+        self._save_surface()
+        self.bus.emit("ui_surface", self.project.id, None, surface=self.surface, version=self.surface_version, source="back")
+        self.service.surface_changed(self)
+        self.service.state_changed(self.project.id)
+        return True
+
+    def surface_meta(self) -> dict | None:
+        if not self.surface:
+            return None
+        return {"title": self.surface.get("title"), "version": self.surface_version, "binds": sorted(genui.binds(self.surface["root"])),
+                "can_go_back": bool(self.surface_stack)}
 
     def set_status(self, text: str) -> None:
         if self.current and self.current.status_text != text:
@@ -207,6 +335,7 @@ class ProjectSession:
             raise
         self._spawn(self._supervise())
         self._spawn(self._worker())
+        self._spawn(self._ui_worker())
 
     async def _connect_and_prepare(self, first: bool) -> None:
         r = self.remote
@@ -274,11 +403,13 @@ class ProjectSession:
                 data = json.loads(out)
                 if data.get("agent") == self.adapter.id:
                     self.agent_state["thread_id"] = data.get("thread_id")
+                    self.agent_state["brief"] = data.get("brief", 1)
             except json.JSONDecodeError:
                 pass
 
     async def _save_agent_state(self) -> None:
-        await self.remote.write_file(f"{self.state_dir}/agent.json", json.dumps({"agent": self.adapter.id, "thread_id": self.agent_state["thread_id"]}))
+        await self.remote.write_file(f"{self.state_dir}/agent.json", json.dumps({"agent": self.adapter.id, "thread_id": self.agent_state["thread_id"],
+                                                                                 "brief": self.agent_state.get("brief", 1)}))
 
     async def _supervise(self) -> None:
         """Reconnects after the SSH connection drops, then resumes following every live run."""
@@ -309,19 +440,21 @@ class ProjectSession:
     # --- runs ---------------------------------------------------------------------------------------------
 
     async def start_run(self, *, kind: str, title: str, command: str, level: int, source: str, task: Task | None,
-                        action: Action | None = None, request_id: str | None = None, prompt: str | None = None) -> Run:
+                        action: Action | None = None, request_id: str | None = None, prompt: str | None = None,
+                        lane: str = "main") -> Run:
         await self.connected_evt.wait()
         run_id = _rid(kind[0])
         d = f"{self.state_dir}/runs/{run_id}"
         run = Run(id=run_id, kind=kind, title=title, command=command, level=level, source=source,
-                  task_id=task.id if task else None, dir=d, action=action, request_id=request_id)
+                  task_id=task.id if task else None, dir=d, action=action, request_id=request_id, lane=lane)
         if kind == "agent":
             run.parser = self.adapter.new_parser()
         r = self.remote
         if prompt is not None:
             await r.write_file(f"{d}/prompt.txt", prompt)
         meta = {"id": run_id, "kind": kind, "title": title, "command": command, "level": level, "source": source,
-                "task": task.to_dict() if task else None, "action": action.id if action else None, "request_id": request_id}
+                "task": task.to_dict() if task else None, "action": action.id if action else None, "request_id": request_id,
+                "lane": lane}
         await r.write_file(f"{d}/meta.json", json.dumps(meta))
         q = shlex.quote
         script = "\n".join([
@@ -349,6 +482,9 @@ class ProjectSession:
     def _begin_run_events(self, run: Run) -> None:
         tid = run.task_id
         if run.kind == "agent":
+            if run.lane == "ui":
+                self.emit("agent_started", tid, agent=self.adapter.display, lane="ui", run=run.id)
+                return
             self.agent_state["state"] = "working"
             self.emit("agent_started", tid, agent=self.adapter.display, thread_id=self.agent_state["thread_id"], run=run.id)
             return
@@ -433,16 +569,24 @@ class ProjectSession:
     def _on_agent_event(self, run: Run, task: Task | None, ev: dict) -> None:
         k = ev["kind"]
         tid = task.id if task else None
+        if run.lane == "ui":
+            self._on_presenter_event(run, task, ev)
+            return
         if k == "thread":
-            if ev.get("thread_id") and ev["thread_id"] != self.agent_state["thread_id"]:
-                self.agent_state["thread_id"] = ev["thread_id"]
+            new_thread = ev.get("thread_id")
+            if new_thread and (new_thread != self.agent_state["thread_id"] or self.agent_state.get("brief_saved") != self.agent_state.get("brief")):
+                self.agent_state["thread_id"] = new_thread
+                self.agent_state["brief_saved"] = self.agent_state.get("brief")
                 self._spawn(self._save_agent_state())
         elif k == "message":
             text = ev["text"].strip()
             if task:
                 task.summary = text
+            run.messages += 1
             self.add_activity("agent", text.split("\n")[0][:160], detail=text, task=tid)
             self.emit("agent_message", tid, text=text, agent=self.adapter.display)
+            if run.messages == 1 and task and not task.spoke:
+                self._spawn(self._maybe_acknowledge(run, task, text))
         elif k == "thinking":
             self.set_status("Thinking…")
         elif k == "plan":
@@ -496,12 +640,43 @@ class ProjectSession:
         elif k == "turn_completed":
             pass
 
+    async def _maybe_acknowledge(self, run: Run, task: Task, text: str) -> None:
+        """The agent's first words in a turn ("I'll look at the pairing flow") are spoken as its acknowledgement,
+        unless they turn out to be its final answer (the turn ends quickly) or it already spoke for itself."""
+        await asyncio.sleep(ACK_AFTER)
+        if run.done.is_set() or task.spoke or run.exit_code is not None or task.status not in ("running", "waiting_approval"):
+            return
+        said = spoken_text(text)
+        if said and self.speak(said, "progress", task.id):
+            task.spoke = True
+            self.add_turn("agent", said, kind="progress", task=task.id)
+
+    def _on_presenter_event(self, run: Run, task: Task | None, ev: dict) -> None:
+        """The presenter's turn: it only builds screens, so it never touches the main conversation's state."""
+        k = ev["kind"]
+        tid = task.id if task else None
+        if k == "message" and task:
+            task.summary = ev["text"].strip()
+        elif k == "command_started" and task:
+            cmd = risk.unwrap(ev["command"])
+            if not re.match(r"^(\S*/)?firedev\s", cmd):
+                task.status_text = parsers.humanize_command(cmd) + "…"
+                self.service.state_changed(self.project.id)
+        elif k == "error" and task and not ev.get("transient"):
+            task.agent_error = _unwrap_error(ev["message"])
+        elif k == "file_changed":
+            path = ev["path"]
+            rel = path[len(self.path) + 1:] if path.startswith(self.path + "/") else path
+            self.add_activity("file", f"Presenter changed {posixpath.basename(rel)}", detail=rel, level=1, task=tid)
+            self._spawn(self.refresh_changes())
+
     # --- run completion -----------------------------------------------------------------------------------
 
     async def _end_run(self, run: Run) -> None:
         tid = run.task_id
         if run.kind == "agent":
-            self.agent_state["state"] = "ready"
+            if run.lane != "ui":
+                self.agent_state["state"] = "ready"
             self.service.state_changed(self.project.id)
             return
         out = run.output()
@@ -556,6 +731,7 @@ class ProjectSession:
         label = (f"Tests: {t['passed']} / {t['total']} passed" if t.get("total") is not None
                  else "Tests passed" if t["state"] == "passed" else t.get("message", "Tests failed"))
         self.add_activity("tests", label, level=0, status="done" if t["state"] == "passed" else "failed", ref=run.id if run else None, task=tid)
+        self.service.history_changed(self)
         self.emit("tests_finished", tid, **{k: v for k, v in t.items() if k != "errors"}, errors=t.get("errors", []),
                   source=run.source if run else "agent")
 
@@ -567,6 +743,7 @@ class ProjectSession:
         n = b["error_count"]
         label = "Build succeeded" if b["ok"] else f"Build failed · {n} error{'s' if n != 1 else ''}" if n else "Build failed"
         self.add_activity("build", label, level=0, status="done" if b["ok"] else "failed", ref=run.id if run else None, task=tid)
+        self.service.history_changed(self)
         self.emit("build_finished", tid, **self.build, source=run.source if run else "agent")
 
     async def _record_artifact(self, path: str) -> None:
@@ -600,11 +777,57 @@ class ProjectSession:
         return next((t for t in self.tasks if t.id == tid), None)
 
     def submit(self, task: Task) -> Task:
+        if task.lane == "ui":
+            # Only the latest screen request matters: a newer one replaces any still waiting.
+            for old in list(self.ui_pending):
+                old.cancelled, old.status = True, "cancelled"
+                self.ui_pending.remove(old)
+            self.ui_pending.append(task)
+            self.tasks.append(task)
+            self.emit("task_queued", task.id, task=task.to_dict(), position=0)
+            self._ui_wake.set()
+            return task
         self.pending.append(task)
         self.tasks.append(task)
         self.emit("task_queued", task.id, task=task.to_dict(), position=len(self.pending) - (0 if self.current else 1))
         self._wake.set()
         return task
+
+    async def _ui_worker(self) -> None:
+        while not self._closed:
+            if not self.ui_pending:
+                self._ui_wake.clear()
+                await self._ui_wake.wait()
+                continue
+            task = self.ui_pending.popleft()
+            if task.cancelled:
+                continue
+            self.ui_current = task
+            task.status, task.started = "running", time.time()
+            task.status_text = "Building the screen…"
+            self.emit("task_started", task.id, task=task.to_dict())
+            try:
+                await self._run_agent_task(task)
+            except Exception as e:  # noqa: BLE001
+                log.exception("presenter task %s crashed", task.id)
+                task.status, task.error = "failed", str(e)
+            task.finished = time.time()
+            if task.cancelled:
+                task.status = "cancelled"
+            self.ui_current = None
+            if task.status == "completed":
+                said = spoken_text(task.summary)
+                if said:
+                    self.speak(said, "reply", task.id)
+                    self.add_turn("agent", said, kind="reply", task=task.id)
+                self.emit("task_completed", task.id, task=task.to_dict())
+            elif task.status == "cancelled":
+                self.emit("task_cancelled", task.id, task=task.to_dict())
+            else:
+                task.status = "failed"
+                self.speak("I couldn't build that screen. " + (task.error or ""), "reply", task.id)
+                self.add_turn("firedev", f"Couldn't build that screen: {task.error or 'unknown error'}", kind="error", task=task.id)
+                self.emit("task_failed", task.id, task=task.to_dict(), error=task.error)
 
     async def _worker(self) -> None:
         while not self._closed:
@@ -632,6 +855,8 @@ class ProjectSession:
             if task.cancelled:
                 task.status = "cancelled"
             self.current = None
+            # Spoken only now, after the agent's turn has really ended: never announce completion early.
+            self._speak_outcome(task)
             if task.status == "completed":
                 self.emit("task_completed", task.id, task=task.to_dict())
             elif task.status == "cancelled":
@@ -642,22 +867,58 @@ class ProjectSession:
             self.add_activity("task-end", {"completed": "Task complete", "cancelled": "Task stopped"}.get(task.status, "Task failed"),
                               detail=task.summary or task.error or "", task=task.id, status="done" if task.status == "completed" else "failed")
 
+    def _speak_outcome(self, task: Task) -> None:
+        voiced = task.source in ("tv", "voice", "assistant", "cli", "admin")
+        if task.kind == "agent":
+            if task.status == "completed":
+                said = spoken_text(task.summary) or "Done."
+                self.speak(said, "reply", task.id)
+                self.add_turn("agent", task.summary or said, kind="reply", task=task.id)
+            elif task.status == "cancelled":
+                self.speak("Stopped.", "reply", task.id)
+                self.add_turn("firedev", "Stopped.", kind="status", task=task.id)
+            else:
+                err = task.error or "something went wrong"
+                self.speak(f"I couldn't finish that. {err}", "reply", task.id)
+                self.add_turn("firedev", f"Couldn't finish: {err}", kind="error", task=task.id)
+        elif voiced and task.summary:
+            self.speak(task.summary + ("." if not task.summary.endswith((".", "!", "?")) else ""), "reply", task.id)
+            self.add_turn("firedev", task.summary, kind="result", task=task.id)
+
     async def _run_agent_task(self, task: Task) -> None:
         if self.agent_state["state"] == "unavailable":
             task.status, task.error = "failed", f"{self.adapter.display} isn't installed on {self.project.machine.display}"
             return
+        tool = f"{self.remote.home}/.firedev/bin/firedev"
+        d = f"{self.state_dir}/runs"
+        prompt_file = f"{d}/{_rid('p')}.prompt.txt"
+        if task.lane == "ui":
+            prompt = self.adapter.compose_presenter(task.prompt or task.text, self._context_for_presenter(task), UI_GUIDE.read_text(), tool=tool)
+            await self.remote.write_file(prompt_file, prompt)
+            effort = self.project.agent_options.get("presenter_effort") or ("low" if task.mode == "ui_edit" else "medium")
+            command = self.adapter.turn_command(prompt_file, None, self.path, self.remote.home, ephemeral=True, effort=effort)
+            run = await self.start_run(kind="agent", title=task.title, command=command, level=1, source=task.source, task=task, lane="ui")
+            await run.done.wait()
+            if task.cancelled:
+                return
+            if run.exit_code == 0 and not task.agent_error:
+                task.status = "completed"
+            else:
+                task.status = "failed"
+                task.error = task.agent_error or _agent_failure(run.output()) or f"{self.adapter.display} stopped with exit code {run.exit_code}"
+            return
         task.base_ref = await self._snapshot_ref(task.id)
         first = not self.agent_state["thread_id"]
-        prompt = self.adapter.compose_prompt(task.prompt or task.text, self._context_for_agent(), first_turn=first,
-                                             tool=f"{self.remote.home}/.firedev/bin/firedev")
+        update = not first and int(self.agent_state.get("brief") or 1) < BRIEF_VERSION
+        prompt = self.adapter.compose_prompt(task.prompt or task.text, self._context_for_agent(task), first_turn=first,
+                                             tool=tool, brief_update=update)
         task.status_text = f"Asking {self.adapter.display}…"
-        d = f"{self.state_dir}/runs"
-        run_id_hint = _rid("p")
-        prompt_file = f"{d}/{run_id_hint}.prompt.txt"
         await self.remote.write_file(prompt_file, prompt)
         command = self.adapter.turn_command(prompt_file, self.agent_state["thread_id"], self.path, self.remote.home)
         self.last_agent_task = task
         run = await self.start_run(kind="agent", title=task.title, command=command, level=1, source=task.source, task=task)
+        if first or update:
+            self.agent_state["brief"] = BRIEF_VERSION
         await run.done.wait()
         if task.cancelled:
             return
@@ -670,13 +931,53 @@ class ProjectSession:
                 self.agent_state["thread_id"] = None
         await self.refresh_changes()
 
-    def _context_for_agent(self) -> str | None:
+    def _ui_context_lines(self, task: Task | None) -> list[str]:
+        if not self.surface:
+            return ["The TV shows no screen from you yet."]
+        lines = [f"The TV currently shows the screen \"{self.surface.get('title')}\" (version {self.surface_version})."]
+        focused = (task.ui or {}).get("focused") if task else None
+        if focused:
+            node, _ = genui.find(self.surface["root"], focused)
+            if node:
+                lines.append(f"The user's remote is on #{focused} ({node.get('type')} \"{genui.label_of(node)[:60]}\"): "
+                             "\"this\" or \"that\" probably means it.")
+        return lines
+
+    def _context_for_presenter(self, task: Task) -> str:
+        snap = self.summary()
+        lines = [f"Project: {snap['name']} ({self.project.id}) at {self.path} on {snap['machine']}. Agent: {self.adapter.display}, {self.agent_state['state']}."]
+        if self.current:
+            lines.append(f"The coding agent is busy with: {self.current.title} ({self.current.status_text}).")
+        t = self.tests
+        if t.get("total") is not None:
+            lines.append(f"Tests: {t.get('passed')} of {t.get('total')} passed ({t.get('state')}).")
+        if self.build.get("state") not in (None, "unknown"):
+            lines.append(f"Build: {self.build.get('state')}.")
+        lines += self._ui_context_lines(task)
+        if self.surface:
+            lines.append("Current screen outline (component ids for patches):\n" + genui.outline(self.surface))
+            if task.mode == "ui_edit":
+                lines.append("Current screen JSON:\n" + json.dumps(self.surface)[:40000])
+        recent = list(self.conversation)[-8:]
+        if recent:
+            lines.append("Recent conversation:\n" + "\n".join(f"{c['role']}: {c['text'][:300]}" for c in recent))
+        lines.append(f"Other FireDev projects: {', '.join(s.project.name + ' (' + s.project.id + ')' for s in self.service.sessions.values())}.")
+        return "\n".join(lines)
+
+    def _context_for_agent(self, task: Task | None = None) -> str | None:
         lines = []
+        if task and (task.ui or task.mode in ("present", "answer")):
+            lines += self._ui_context_lines(task)
         if self.build.get("state") == "failed" and self.build.get("errors"):
             lines.append("The last build failed:")
             lines += [f"- {e.get('file') or ''}:{e.get('line') or ''} {e['message']}" for e in self.build["errors"][:6]]
         if self.tests.get("state") == "failed":
             lines.append(f"The last test run had {self.tests.get('failed')} failing test(s).")
+        if task and task.mode == "answer":
+            lines.append("This is a question: answer it from what you know and can read. Don't change files unless asked.")
+        elif task and task.mode == "present":
+            lines.append("The user wants to see this on the TV: gather real data and show it with the helper's `ui show`, "
+                         "then answer in one or two spoken sentences.")
         return "\n".join(lines) or None
 
     async def _run_action_task(self, task: Task) -> None:
@@ -725,6 +1026,16 @@ class ProjectSession:
 
     async def cancel(self, source: str = "tv") -> bool:
         stopped = False
+        for t in list(self.ui_pending):
+            t.cancelled = True
+            self.ui_pending.remove(t)
+        if self.ui_current:
+            self.ui_current.cancelled = True
+            for rid in self.ui_current.run_ids:
+                run = self.runs.get(rid)
+                if run and not run.done.is_set():
+                    await self.remote.run(f"tmux kill-window -t {self._t(rid)} 2>/dev/null")
+            stopped = True
         for t in list(self.pending):
             t.cancelled = True
             self.pending.remove(t)
@@ -775,6 +1086,9 @@ class ProjectSession:
         except json.JSONDecodeError:
             await self._set_request_state(rid, "error unreadable request")
             return
+        if req.get("type") in ("ui", "say", "data"):
+            await self._answer_request(rid, req)
+            return
         task = self.current
         action: Action | None = None
         if req.get("type") == "action":
@@ -816,6 +1130,56 @@ class ProjectSession:
         if task:
             self.set_status(title + "…")
 
+    async def _answer_request(self, rid: str, req: dict) -> None:
+        """ui, say and data requests from an agent: FireDev answers them itself, nothing runs."""
+        q = shlex.quote
+        kind, sub = req.get("type"), req.get("action") or ""
+        task = self.ui_current if self.ui_current and self.ui_current.status == "running" and kind == "ui" else self.current
+        tid = task.id if task else None
+        out, state = "", "done"
+        try:
+            if kind == "say":
+                text = (req.get("command") or "").strip()
+                if self.speak(text, "progress", tid):
+                    self.add_turn("agent", clean_for_speech(text), kind="progress", task=tid)
+                    state = "done said on the TV"
+                else:
+                    state = "done skipped: you spoke a moment ago; say it in your final message instead"
+                if self.current:
+                    self.current.spoke = True
+            elif kind == "data":
+                data = await self.service.data_for(self, sub)
+                out = json.dumps(data, indent=1, default=str)[:60000]
+            elif sub in ("current", "current-json"):
+                if not self.surface:
+                    out = "The TV shows no screen from an agent yet."
+                elif sub == "current-json":
+                    out = json.dumps(self.surface, indent=1)
+                else:
+                    out = genui.outline(self.surface, limit=120)
+            else:
+                _, payload, _ = await self.remote.run(f"cat {q(self.queue_dir)}/{rid}.json 2>/dev/null")
+                try:
+                    if sub == "patch":
+                        changed = self.patch_surface(json.loads(payload), "agent", tid)
+                        state = f"done patched {', '.join(changed)} on the TV (version {self.surface_version})"
+                    else:
+                        clean = self.show_surface(payload, "agent", tid)
+                        n = sum(1 for _ in genui.walk(clean["root"]))
+                        state = f"done shown on the TV: \"{clean['title']}\" ({n} components, version {self.surface_version})"
+                        self.add_activity("screen", f"Screen: {clean['title']}", detail=genui.outline(clean, 30), task=tid)
+                except (genui.SpecError, json.JSONDecodeError) as e:
+                    errs = e.errors if isinstance(e, genui.SpecError) else [f"not valid JSON: {e.msg} at line {e.lineno}"]
+                    out = "\n".join("- " + x for x in errs[:20])
+                    state = "error the screen was refused; fix these and try again"
+                    self.add_activity("warning", "A screen from the agent was refused", detail=out, task=tid, status="failed")
+        except Exception as e:  # noqa: BLE001 - the agent must always get an answer
+            log.exception("answering %s request failed", kind)
+            out, state = "", f"error {e}"
+        if out:
+            await self.remote.write_file(f"{self.queue_dir}/{rid}.out", out + "\n")
+        await self._set_request_state(rid, state)
+
     # --- reattach after FireDev restarts ----------------------------------------------------------------
 
     async def _reattach_runs(self) -> None:
@@ -840,7 +1204,9 @@ class ProjectSession:
             action = self.project.actions.get(meta.get("action") or "")
             run = Run(id=meta["id"], kind=meta["kind"], title=meta["title"], command=meta["command"], level=meta["level"],
                       source=meta["source"], task_id=task.id if task else None, dir=f"{self.state_dir}/runs/{meta['id']}",
-                      action=action, request_id=meta.get("request_id"))
+                      action=action, request_id=meta.get("request_id"), lane=meta.get("lane") or "main")
+            if task and run.lane == "ui":
+                task.lane = "ui"
             if run.kind == "agent":
                 run.parser = self.adapter.new_parser()
             self.runs[run.id] = run
@@ -849,7 +1215,7 @@ class ProjectSession:
             self.add_activity("notice", f"Reattached to {run.title}", task=run.task_id)
             self._begin_run_events(run)
             self._spawn(self._follow(run))
-            if task and run.kind == "agent" and self.current is None:
+            if task and run.kind == "agent" and run.lane == "main" and self.current is None:
                 self.current = task
                 self.last_agent_task = task
                 self._spawn(self._finish_reattached(task, run))
@@ -961,6 +1327,7 @@ class ProjectSession:
         await self.cancel("admin")
         self.tasks.clear()
         self.activity.clear()
+        self.conversation.clear()
         self.raw.clear()
         self.build, self.tests, self.deploy = {"state": "unknown"}, {"state": "unknown"}, {"state": "unknown"}
         self.last_command = None
@@ -1004,6 +1371,9 @@ class ProjectSession:
             "changes": self.changes,
             "activity": list(self.activity)[-80:],
             "approvals": self.service.pending_approvals(p.id),
+            "conversation": list(self.conversation)[-30:],
+            "surface": self.surface_meta(),
+            "ui_task": (self.ui_current or next(iter(self.ui_pending), None)).to_dict() if (self.ui_current or self.ui_pending) else None,
         }
 
 

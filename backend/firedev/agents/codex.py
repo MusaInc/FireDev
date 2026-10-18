@@ -14,7 +14,8 @@ class CodexAdapter(AgentAdapter):
     display = "Codex"
     binary = "codex"
 
-    def turn_command(self, prompt_file: str, thread_id: str | None, cwd: str, home: str) -> str:
+    def turn_command(self, prompt_file: str, thread_id: str | None, cwd: str, home: str, ephemeral: bool = False,
+                     effort: str | None = None) -> str:
         roots = [self.expand(p, home) for p in self.options.get("writable_roots", [])]
         cfg = [
             "-c", 'sandbox_mode="workspace-write"',
@@ -25,11 +26,14 @@ class CodexAdapter(AgentAdapter):
             cfg += ["-c", "sandbox_workspace_write.writable_roots=" + json.dumps(roots)]
         if self.options.get("model"):
             cfg += ["-m", str(self.options["model"])]
-        if self.options.get("reasoning_effort"):
-            cfg += ["-c", f'model_reasoning_effort="{self.options["reasoning_effort"]}"']
+        effort = effort or self.options.get("reasoning_effort")
+        if effort:
+            cfg += ["-c", f'model_reasoning_effort="{effort}"']
         args = [self.binary, "exec"]
-        if thread_id:
+        if thread_id and not ephemeral:
             args += ["resume", thread_id]
+        if ephemeral:
+            args += ["--ephemeral"]
         args += ["--json", "--skip-git-repo-check", *cfg, "-"]
         return f"cd {shlex.quote(cwd)} && " + " ".join(shlex.quote(a) for a in args) + f" < {shlex.quote(prompt_file)}"
 

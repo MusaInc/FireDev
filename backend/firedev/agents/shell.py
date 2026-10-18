@@ -19,7 +19,8 @@ class ShellAdapter(AgentAdapter):
     def compose_prompt(self, task: str, context: str | None = None, first_turn: bool = True, tool: str = "firedev") -> str:
         return task
 
-    def turn_command(self, prompt_file: str, thread_id: str | None, cwd: str, home: str) -> str:
+    def turn_command(self, prompt_file: str, thread_id: str | None, cwd: str, home: str, ephemeral: bool = False,
+                     effort: str | None = None) -> str:
         return f"cd {shlex.quote(cwd)} && bash {shlex.quote(prompt_file)}"
 
     def new_parser(self) -> TurnParser:

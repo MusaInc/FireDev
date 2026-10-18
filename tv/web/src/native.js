@@ -29,6 +29,24 @@ export const native = {
     };
   },
   speechAvailable() { return !!(N && N.speechAvailable && N.speechAvailable()); },
+  /** Text to speech: the shell's Android TextToSpeech, or the browser's speech synthesis in the preview. Reports
+   *  {type: 'tts', phase: 'start' | 'done' | 'stopped' | 'error', id} through onEvent. */
+  ttsAvailable() { return !!(N && N.speak) || !!window.speechSynthesis; },
+  speak(id, text) {
+    if (N && N.speak) { N.speak(id, text); return; }
+    const ss = window.speechSynthesis;
+    if (!ss) { setTimeout(() => handler({ type: 'tts', phase: 'error', id }), 0); return; }
+    const u = new window.SpeechSynthesisUtterance(text);
+    u.rate = 1.04;
+    u.onstart = () => handler({ type: 'tts', phase: 'start', id });
+    u.onend = () => handler({ type: 'tts', phase: 'done', id });
+    u.onerror = (e) => handler({ type: 'tts', phase: e && e.error === 'interrupted' ? 'stopped' : 'error', id });
+    ss.speak(u);
+  },
+  stopSpeaking() {
+    if (N && N.stopSpeaking) N.stopSpeaking();
+    else if (window.speechSynthesis) window.speechSynthesis.cancel();
+  },
   startSpeech() { if (N && N.startSpeech) N.startSpeech(); },
   stopSpeech() { if (N && N.stopSpeech) N.stopSpeech(); },
   exit() { if (N && N.exitApp) N.exitApp(); },

@@ -51,7 +51,7 @@ def create_app(config: Config, devices: DeviceStore) -> FastAPI:
 
     @app.get("/api/health")
     async def health():
-        return {"ok": True, "projects": len(service.sessions), "version": "0.1.0"}
+        return {"ok": True, "projects": len(service.sessions), "version": "0.2.0", "ui_schema": "firedev.ui/1"}
 
     @app.post("/api/command")
     async def command(request: Request):
@@ -251,7 +251,7 @@ def create_app(config: Config, devices: DeviceStore) -> FastAPI:
         await websocket.send_json({
             "type": "hello", "client": {"id": client.id, "name": client.name, "role": client.role},
             "home": service.home(), "projects": {pid: s.snapshot() for pid, s in service.sessions.items()},
-            "approvals": service.pending_approvals(), "focus": service.focus_project,
+            "approvals": service.pending_approvals(), "focus": service.focus_project, "ui": service.ui_snapshot(),
         })
 
         async def pump():
@@ -277,7 +277,8 @@ def create_app(config: Config, devices: DeviceStore) -> FastAPI:
                         service.bus.emit("voice_partial", pid, None, text=msg.get("text", ""), source=msg.get("source", client.role))
                     else:
                         asyncio.create_task(_reply(websocket, client, {"id": msg.get("id"), "name": "voice_command",
-                                                                         "args": {"text": msg.get("text", ""), "source": msg.get("source", client.role), "project": msg.get("project")}}))
+                                                                         "args": {"text": msg.get("text", ""), "source": msg.get("source", client.role), "project": msg.get("project"),
+                                                                                  "ui": msg.get("ui") if isinstance(msg.get("ui"), dict) else None}}))
                 elif op == "ping":
                     await websocket.send_json({"type": "pong"})
         except (WebSocketDisconnect, RuntimeError):

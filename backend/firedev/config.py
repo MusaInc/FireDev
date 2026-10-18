@@ -72,6 +72,8 @@ class Project:
     aliases: list[str] = field(default_factory=list)
     actions: dict[str, Action] = field(default_factory=dict)
     agent_options: dict = field(default_factory=dict)
+    # Web addresses this project's screens may show in a preview component (its preview server, for example).
+    previews: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.tmux_session:
@@ -187,6 +189,7 @@ def parse(raw: dict, path: Path | None = None) -> Config:
             aliases=[str(x).lower() for x in p.get("aliases") or []],
             actions=actions,
             agent_options=dict(p.get("agent_options") or {}),
+            previews=[str(x) for x in p.get("previews") or []],
         )
     return Config(settings=settings, machines=machines, projects=projects, path=path)
 

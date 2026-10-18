@@ -24,6 +24,7 @@ EVENT_TYPES = {
     "approval_required", "approval_accepted", "approval_rejected",
     "task_queued", "task_started", "task_completed", "task_failed", "task_cancelled",
     "changes_undone", "state", "notice",
+    "ui_surface", "ui_patch", "ui_data", "agent_speech",
 }
 
 _ids = itertools.count(1)
@@ -47,7 +48,7 @@ class Event:
 
 
 # Too chatty or too large to keep in history files.
-_NOT_PERSISTED = {"command_output", "state", "voice_partial", "voice_listening"}
+_NOT_PERSISTED = {"command_output", "state", "voice_partial", "voice_listening", "ui_surface", "ui_patch", "ui_data"}
 
 
 class Bus:

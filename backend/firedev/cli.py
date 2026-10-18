@@ -7,6 +7,7 @@
   firedev add-assistant <name>      create a token for an MCP client
   firedev say "<words>"             send a voice command as if spoken
   firedev status [project]          print project status
+  firedev ui show <file>|back       put a generated screen (firedev.ui/1 JSON) on the TV, or go back one
   firedev mcp                       MCP over stdio (bridges to the running service)
   firedev demo setup|reset          create or reset the broken sample project
 """
@@ -97,6 +98,25 @@ def cmd_say(args, c):
     print(f"→ {r.get('intent', {}).get('title', '')}: {r.get('message', '')}")
 
 
+def cmd_ui(args, c):
+    if args.action == "back":
+        r = _call(c, "POST", "/api/command", {"name": "ui_back", "args": {"project": args.project}})
+        print("Back to the previous screen." if r.get("ok") else "There's no earlier screen.")
+        return
+    if not args.file:
+        sys.exit("firedev: name the screen's JSON file (or - for stdin)")
+    raw = sys.stdin.read() if args.file == "-" else Path(args.file).read_text()
+    name = "ui_patch" if args.action == "patch" else "ui_show"
+    body = {"project": args.project, "ops" if name == "ui_patch" else "surface": json.loads(raw)}
+    try:
+        r = _call(c, "POST", "/api/command", {"name": name, "args": body})
+    except SystemExit:
+        raise
+    if not r.get("ok"):
+        sys.exit("firedev: " + r.get("message", "refused") + "\n" + "\n".join("  - " + e for e in r.get("errors", [])))
+    print(f"On the TV (version {r['version']}).")
+
+
 def cmd_status(args, c):
     r = _call(c, "POST", "/api/command", {"name": "get_project_status", "args": {"project": args.project}})
     print(r.get("spoken"))
@@ -167,6 +187,8 @@ def main(argv: list[str] | None = None) -> None:
     s = sub.add_parser("add-assistant"); s.add_argument("name"); s.add_argument("--role", default="assistant", choices=["assistant", "tv", "voice"]); s.set_defaults(fn=cmd_add_assistant)
     s = sub.add_parser("say"); s.add_argument("words"); s.add_argument("--project"); s.set_defaults(fn=cmd_say)
     s = sub.add_parser("status"); s.add_argument("project", nargs="?"); s.set_defaults(fn=cmd_status)
+    s = sub.add_parser("ui"); s.add_argument("action", choices=["show", "patch", "back"]); s.add_argument("file", nargs="?")
+    s.add_argument("--project"); s.set_defaults(fn=cmd_ui)
     s = sub.add_parser("mcp"); s.add_argument("--token"); s.set_defaults(fn=cmd_mcp)
     s = sub.add_parser("demo"); s.add_argument("action", choices=["setup", "reset"]); s.add_argument("--project", default="pulse")
     s.add_argument("--keep-thread", action="store_true", help="keep the agent's conversation"); s.set_defaults(fn=cmd_demo)

@@ -1,0 +1,88 @@
+FIREDEV TV SCREENS (schema firedev.ui/1)
+
+Show something on the user's TV:      firedev ui show <<'JSON' ... JSON      (or: firedev ui show file.json)
+Change part of what is shown:         firedev ui patch <<'JSON' [ops...] JSON
+Read what the TV shows now:           firedev ui current        (outline with component ids; --json for the full spec)
+Speak a short progress line:          firedev say "Found it: the pairing code expires too early."
+Real FireDev data as JSON:            firedev data status|projects|agents|history|approvals|conversation
+
+The TV is 1920x1080, read from a sofa with a remote (arrows, OK, Back). Prefer a few large components over many
+small ones: about 3-8 per screen. FireDev checks every screen; if it is refused, the error says what to fix.
+
+NEVER INVENT DATA. Use numbers you measured or read (files, git, test output, `firedev data`). If something is
+unavailable, say so in a text component. Illustrative values must set "example": true on the component and the
+surface provenance kind "example" or "mixed".
+
+SURFACE
+{"schema":"firedev.ui/1","title":"Short heading","subtitle":"optional",
+ "provenance":{"kind":"live|agent|mixed|example","sources":["git log","firedev data agents"],"note":"optional"},
+ "speak":"optional sentence FireDev reads aloud when the screen appears",
+ "root":{ component }}
+provenance.kind: live = only $bind data, agent = values you gathered, mixed = both, example = illustrative.
+
+COMPONENTS (all accept "id" (letters/digits/_/-, give ids to anything you may patch later), "size": s|m|l|xl,
+"example": true|false). tone: neutral|good|bad|warn|info|accent. icon: check cross agent terminal file code shield
+deploy wait android mic undo dot.
+ layout
+  grid      columns 1-4, gap s|m|l, children. size l spans 2 columns, xl the full row.
+  stack     direction vertical|horizontal, gap, align start|center|stretch, children
+  tabs      selected, children: tab {label, children}
+  section   title, subtitle, children
+  card      title, subtitle, badge, tone, icon, detail (shown when expanded), expandable, expanded, action, children
+ content
+  text      text, style display|title|heading|body|caption|mono, tone, max_lines
+  badge     text, tone, icon
+  button    label, action, tone, icon
+  metric    label, value, unit, delta, tone, caption, trend [numbers], action
+  progress  label, value, max (default 100), indeterminate, tone, caption
+  list      title, items [{title, detail, badge, tone, icon, status, time, value, action}]
+  timeline  title, items (same as list; status done|running|waiting|failed|todo)
+  table     title, columns [{key,label,align,format}], rows [{key: value}], max_rows
+  chart     kind line|bar|area|pie, title, unit, x_label, y_label, labels [..],
+            series [{name, tone, points: [y, ...] or [[x, y], ...]}], views [kinds the user may switch to], caption
+  graph     title, direction right|down, nodes [{id,label,detail,group,tone,icon}], edges [{from,to,label,style}]
+            (architecture diagrams, flowcharts, dependency graphs; up to 60 nodes)
+  code      title, language, code, start_line, highlight [line numbers]
+  diff      title, path (live working-tree diff of that file) or text (a unified diff)
+  terminal  title, ref ("last" = the latest command, live) or text, lines
+  image     src (https URL on an allowed preview address), alt, caption
+  preview   url (allowed preview address of this project), title, caption
+  choice    prompt, options [{label, value, detail}]  - the user's pick is sent back to you as their answer
+  form      title, prompt, submit, fields [{key,label,kind choice|toggle|number, options, value, min, max, step}]
+ live (FireDev keeps these current by itself)
+  agent_status  title, source agents|project, filter (text to match)
+  approvals     title - approvals waiting on the TV; selecting one opens FireDev's approval sheet
+
+LIVE DATA BINDING: any value can be {"$bind": "<path>"} instead of a literal; the TV keeps it current.
+ project.tests.passed  project.tests.total  project.tests.failed  project.tests.state  project.build.state
+ project.build.error_count  project.changes.files  project.changes.added  project.task.title  project.task.status_text
+ project.deploy.url  project.agent.state  projects  approvals  agents  history.tests  history.builds  conversation
+ Options: "format": count|percent|duration|bytes|time|text, "fallback": "—", "filter": {"field": value}
+ Chart series from history: {"name":"Passed","points":{"$bind":"history.tests","x":"ts","y":"passed"}}
+ Table rows / list items from a source: "rows": {"$bind": "agents"}  (agents fields: agent, project, cwd, mode,
+ state, task, uptime_s, cpu)
+
+ACTIONS (on card, button, metric, list items): {"type": ...}
+ ask {text}               send text to you as the user's next request
+ navigate {to}            home|workspace|activity|changes|terminal|back|surface
+ open_project {project}   run_action {action} (a declared project action; risky ones still need approval)
+ open_diff {path}         open_output {ref}        open_approval {approval}   expand {target}
+ select_tab {target,tab}  cancel_task (the TV confirms first)      open_preview {url}
+Generated screens can never approve anything: approvals happen only on FireDev's own approval sheet.
+
+PATCH OPERATIONS (firedev ui patch): a list of
+ {"op":"set","id":"c1","props":{"size":"xl","title":"New"}}     (null removes a property)
+ {"op":"replace","id":"c1","node":{component}}   {"op":"append"|"prepend","id":"grid1","node":{component}}
+ {"op":"remove","id":"c1"}   {"op":"meta","title":"...","subtitle":"...","provenance":{...}}
+Patch what changed instead of re-sending the whole screen.
+
+EXAMPLE
+firedev ui show <<'JSON'
+{"schema":"firedev.ui/1","title":"Pulse test health","provenance":{"kind":"mixed","sources":["FireDev test runs"]},
+ "root":{"type":"grid","columns":3,"children":[
+  {"type":"metric","id":"pass","label":"Passing","value":{"$bind":"project.tests.passed"},"tone":"good"},
+  {"type":"metric","id":"fail","label":"Failing","value":{"$bind":"project.tests.failed"},"tone":"bad"},
+  {"type":"card","id":"cause","title":"Root cause","detail":"FocusTimer.reset() keeps the old start time.","expandable":true},
+  {"type":"chart","id":"trend","kind":"line","size":"xl","title":"Passing tests per run","views":["line","bar"],
+   "series":[{"name":"Passed","points":{"$bind":"history.tests","x":"ts","y":"passed"}}]}]}}
+JSON

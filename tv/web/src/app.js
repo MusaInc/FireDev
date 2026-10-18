@@ -14,9 +14,11 @@ import { WorkspaceScreen } from './screens/workspace.js';
 import { ActivityScreen } from './screens/activity.js';
 import { DiffScreen } from './screens/diff.js';
 import { CenterScreen } from './screens/center.js';
+import { SurfaceScreen } from './screens/surface.js';
 import { Overlays } from './overlays.js';
+import { createVoice } from './voice.js';
 
-const SCREENS = { home: HomeScreen, workspace: WorkspaceScreen, activity: ActivityScreen, diff: DiffScreen, center: CenterScreen };
+const SCREENS = { home: HomeScreen, workspace: WorkspaceScreen, activity: ActivityScreen, diff: DiffScreen, center: CenterScreen, surface: SurfaceScreen };
 
 export function createApp() {
   const stage = document.getElementById('stage');
@@ -37,6 +39,8 @@ export function createApp() {
     route: { name: 'center' },
     screen: null,
     config: native.config(),
+    // Generated screens per project ({surface, version, patch}) and the live data they bind to.
+    ui: { surfaces: {}, data: { agents: [], agents_updated: 0, history: {} } },
   };
 
   // --- stage scaling: everything is laid out on 1920×1080 -----------------------------------------------
@@ -65,6 +69,7 @@ export function createApp() {
 
   app.focus = createFocus();
   app.overlays = new Overlays(app);
+  app.voice = createVoice(app);
 
   // --- rendering -----------------------------------------------------------------------------------------
   let frame = 0;
@@ -74,6 +79,7 @@ export function createApp() {
       frame = 0;
       if (app.screen) app.screen.update();
       app.overlays.update();
+      app.voice.renderDock();
       app.focus.restore();
     });
   };
@@ -120,9 +126,42 @@ export function createApp() {
     if (!p || p.connection !== 'connected') app.command('open_project', { project: pid });
   };
 
-  app.say = function (text, source) {
-    app.link.voice(text, { source: source || 'tv', project: app.route.project || app.focusProject });
+  /** What the remote is pointing at on a generated screen, so "make that bigger" knows what "that" is. */
+  app.uiContext = function () {
+    if (app.route.name !== 'surface') return null;
+    const el = app.focus.focusedEl();
+    const holder = el && el.closest ? el.closest('[data-gid]') : null;
+    const pid = app.route.project;
+    const entry = app.ui.surfaces[pid];
+    return { focused: holder ? holder.dataset.gid : null, version: entry ? entry.version : null };
   };
+
+  app.say = function (text, source) {
+    app.link.voice(text, { source: source || 'tv', project: app.route.project || app.focusProject, ui: app.uiContext() });
+  };
+
+  /** Navigation targets used by voice replies and generated screens. */
+  app.go = function (to, pid) {
+    pid = pid || app.route.project || app.focusProject;
+    if (to === 'home') return app.navigate('home', { preselect: pid });
+    if (!pid) return null;
+    if (to === 'surface') return app.route.name === 'surface' && app.route.project === pid ? null : app.navigate('surface', { project: pid });
+    if (to === 'activity') return app.navigate('activity', { project: pid });
+    if (to === 'changes') return app.navigate('diff', { project: pid });
+    if (to === 'back') return app.focus.back();
+    if (to === 'workspace' || to === 'terminal') {
+      if (app.route.name !== 'workspace' || app.route.project !== pid) app.navigate('workspace', { project: pid });
+      if (to === 'terminal' && app.screen && app.screen.openLastOutput) app.screen.openLastOutput();
+    }
+    return null;
+  };
+
+  function surfaceArrived(pid, fromVoice) {
+    const here = app.route.project || app.focusProject;
+    if (pid !== here || app.overlays.approval) return;
+    // A new screen takes over the workspace and its own screen; it never pulls you out of a diff or the activity.
+    if (app.route.name === 'workspace' || app.route.name === 'surface' || fromVoice) app.go('surface', pid);
+  }
 
   // --- server messages -----------------------------------------------------------------------------------
   function onMessage(msg) {
@@ -148,6 +187,16 @@ export function createApp() {
       app.home = msg.home;
       app.projects = msg.projects || {};
       app.approvals = msg.approvals || [];
+      if (msg.ui) {
+        // Keep any screen version we already have so a reconnect doesn't redraw (and lose focus) for nothing.
+        const prev = app.ui.surfaces;
+        app.ui.surfaces = {};
+        Object.keys(msg.ui.surfaces || {}).forEach((pid) => {
+          const s = msg.ui.surfaces[pid];
+          app.ui.surfaces[pid] = prev[pid] && prev[pid].version === s.version ? prev[pid] : { surface: s.surface, version: s.version };
+        });
+        app.ui.data = Object.assign(app.ui.data, msg.ui.data || {});
+      }
       const first = !app.everOnline;
       app.everOnline = true;
       if (first || app.route.name === 'center') {
@@ -175,6 +224,23 @@ export function createApp() {
   function handleEvent(ev) {
     const d = ev.data || {};
     switch (ev.type) {
+      case 'ui_surface':
+        app.ui.surfaces[ev.project] = { surface: d.surface, version: d.version };
+        surfaceArrived(ev.project, false);
+        break;
+      case 'ui_patch':
+        app.ui.surfaces[ev.project] = { surface: d.surface, version: d.version, patch: { base: d.base, changed: d.changed || [] } };
+        break;
+      case 'ui_data':
+        if (d.source === 'agents') { app.ui.data.agents = d.data || []; app.ui.data.agents_updated = d.updated || Date.now() / 1000; }
+        if (d.source === 'history' && ev.project) app.ui.data.history[ev.project] = d.data;
+        break;
+      case 'agent_speech':
+        app.voice.onSpeech(ev);
+        break;
+      case 'command_output':
+        if (app.route.name === 'surface' && app.screen.onOutput) app.screen.onOutput(ev);
+        return;
       case 'approval_required':
         if (!app.approvals.some((a) => a.id === d.approval.id)) app.approvals.push(d.approval);
         native.attention();
@@ -186,10 +252,16 @@ export function createApp() {
         app.overlays.syncApprovals();
         if (ev.type === 'approval_rejected') app.toast('Rejected: ' + d.approval.title, 'bad');
         break;
+      case 'voice_reply':
+        if (d.speech === 'stop') app.voice.stop();
+        if (d.listen === 'off') app.voice.end();
+        if (d.navigate && ['surface', 'terminal', 'workspace'].indexOf(d.navigate) >= 0) app.go(d.navigate, ev.project);
+        if (d.client_action && app.route.name === 'surface' && app.screen.clientAction) app.screen.clientAction(d.client_action);
+        app.overlays.voiceEvent(ev);
+        break;
       case 'voice_listening':
       case 'voice_partial':
       case 'voice_command':
-      case 'voice_reply':
         app.overlays.voiceEvent(ev);
         break;
       case 'build_finished':
@@ -237,14 +309,21 @@ export function createApp() {
     if (app.focus.key(action, down)) return;
     if (action === 'select') { if (down) app.focus.select(); return; }
     if (!down) return;
+    // Back while the microphone is open just closes it; the screen stays where it is.
+    if (action === 'back' && (app.voice.listening || app.voice.speaking) && !app.overlays.approval) { app.voice.stop(); app.voice.end(); return; }
     if (action === 'back') { if (!app.focus.back()) native.exit(); return; }
-    if (action === 'menu' || action === 'playpause') { app.overlays.openVoice(); return; }
+    if (action === 'menu' || action === 'playpause') {
+      if (app.overlays.approval) return;
+      if (!app.voice.toggle()) app.overlays.openVoice();
+      return;
+    }
     if (action === 'up' || action === 'down' || action === 'left' || action === 'right') app.focus.move(action);
   });
 
   native.onEvent((e) => {
     if (e.type === 'lifecycle' && e.state === 'resume') app.link.reconnectNow();
-    if (e.type === 'speech') app.overlays.nativeSpeech(e);
+    if (e.type === 'speech') app.voice.onNative(e);
+    if (e.type === 'tts') app.voice.onTts(e);
   });
 
   app.link = createLink({ server: app.config.server, token: app.config.token, onMessage, onStatus });
