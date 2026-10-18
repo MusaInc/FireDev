@@ -59,6 +59,11 @@ class MainActivity : Activity() {
             settings.setSupportZoom(false)
             settings.builtInZoomControls = false
             settings.displayZoomControls = false
+            // The page scales its own 1920×1080 stage to the screen: keep the viewport at the real screen size and
+            // ignore the system font scale, which would otherwise enlarge text past the fixed layout.
+            settings.useWideViewPort = false
+            settings.loadWithOverviewMode = false
+            settings.textZoom = 100
             addJavascriptInterface(Bridge(), "FireDevNative")
             webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView, url: String) {

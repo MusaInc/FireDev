@@ -227,6 +227,27 @@ test('an unpaired TV shows a pairing code and pairs from the CLI', async ({ page
   expect(await page.evaluate(() => localStorage.getItem('firedev.token'))).toBeTruthy();
 });
 
+// A TV WebView whose CSS viewport is smaller than 1920×1080 (960×540 on most 1080p TVs) must show the whole
+// pairing screen scaled down, not a 1:1 corner of it.
+test('the pairing screen fits a small mobile-style TV viewport inside the safe area', async ({ browser }) => {
+  const ctx = await browser.newContext({ viewport: { width: 960, height: 540 }, deviceScaleFactor: 2, isMobile: true });
+  const page = await ctx.newPage();
+  await page.goto('/tv/');
+  await page.evaluate(() => localStorage.clear());
+  await page.goto('/tv/');
+  await expect(page.locator('.code-digits')).toBeVisible();
+  const outside = await page.evaluate(() => {
+    const w = window.visualViewport.width, h = window.visualViewport.height, bad = [];
+    for (const el of document.querySelectorAll('#screen .t-title, #screen .code-digits span, #screen .terminal, #screen .t-body, #screen .t-meta')) {
+      const r = el.getBoundingClientRect();
+      if (r.left < w * 0.05 || r.top < h * 0.05 || r.right > w * 0.95 || r.bottom > h * 0.95) bad.push(el.className + ' ' + JSON.stringify([r.left, r.top, r.right, r.bottom]));
+    }
+    return bad;
+  });
+  expect(outside).toEqual([]);
+  await ctx.close();
+});
+
 test('the TV reconnects after its connection drops and resyncs state', async ({ page }) => {
   await open(page);
   await toWorkspace(page);

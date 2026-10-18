@@ -31,7 +31,7 @@ how you give instructions.
 | Risk levels 0–3, approvals on the TV, held confirmation for level 3 | **Working**, tested with remote keys |
 | Agent requests outside its sandbox (`firedev run`, `firedev request`) gated by the TV | **Working**, tested |
 | Diff review, raw terminal output, undo of the agent's last change | **Working**, tested |
-| Fire TV app (Kotlin WebView shell + TV interface), D-pad only | **Working** in the browser at 1080p (12 remote-key tests) and when loaded the way the APK loads it (`tools/shell-sim.mjs`); APK builds. **Not yet run on a physical Fire TV** (pending) |
+| Fire TV app (Kotlin WebView shell + TV interface), D-pad only | **Working** in the browser at 1080p (14 browser tests, incl. a 960×540 TV-viewport fit check) and when loaded the way the APK loads it (`tools/shell-sim.mjs`); APK builds. **Not yet run on a physical Fire TV** (pending) |
 | Phone microphone (`/voice`): live transcript on the TV, typed fallback | **Working** (tested in a phone-sized browser and with streamed partial transcripts). Browser speech recognition needs HTTPS; not yet tried on a real phone |
 | Pairing a TV with a 6-digit code | **Working**, tested |
 | MCP server (`/mcp`, `firedev mcp` stdio) | **Working**: unit-tested, and the stdio bridge was exercised against the running service |

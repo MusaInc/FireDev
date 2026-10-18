@@ -38,14 +38,28 @@ export function createApp() {
   };
 
   // --- stage scaling: everything is laid out on 1920×1080 -----------------------------------------------
+  // Scale to what is actually visible. Some TV WebViews report a layout viewport larger than the screen
+  // (innerWidth 1920 while 960 CSS px show), so take the smallest non-zero measurement.
+  function visibleSize() {
+    const vv = window.visualViewport;
+    const de = document.documentElement;
+    const pick = (vals) => Math.min.apply(null, vals.filter((v) => v > 0));
+    return [pick([window.innerWidth, de.clientWidth, vv ? vv.width : 0]), pick([window.innerHeight, de.clientHeight, vv ? vv.height : 0])];
+  }
   function fit() {
-    const s = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
+    const [w, h] = visibleSize();
+    if (!isFinite(w) || !isFinite(h)) return;
+    const s = Math.min(w / 1920, h / 1080);
     stage.style.transform = 'scale(' + s + ')';
-    stage.style.left = Math.round((window.innerWidth - 1920 * s) / 2) + 'px';
-    stage.style.top = Math.round((window.innerHeight - 1080 * s) / 2) + 'px';
+    stage.style.left = Math.round((w - 1920 * s) / 2) + 'px';
+    stage.style.top = Math.round((h - 1080 * s) / 2) + 'px';
   }
   window.addEventListener('resize', fit);
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', fit);
+  window.addEventListener('load', fit);
   fit();
+  // Older WebViews can report 0×0 until the first layout; settle once more after it.
+  setTimeout(fit, 300);
 
   app.focus = createFocus();
   app.overlays = new Overlays(app);
