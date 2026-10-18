@@ -52,6 +52,7 @@ how you give instructions.
 ```bash
 git clone <this repo> firedev && cd firedev
 tools/setup.sh                 # venv, TV bundle, ~/.config/firedev/firedev.yaml
+tools/install-cli.sh           # puts `firedev` on PATH (/usr/local/bin symlink)
 ```
 
 ### 1. SSH key for FireDev
@@ -120,7 +121,7 @@ adb connect <fire-tv-ip>:5555
 adb install -r app/build/outputs/apk/release/app-release.apk
 ```
 
-Open FireDev on the TV. It shows a 6-digit code; on the service machine run `./firedev pair 123456`.
+Open FireDev on the TV. It shows a 6-digit code; on the service machine run `firedev pair 123456`. The code stays the same for its 10 minutes (reconnects and app restarts bring the same one back); when it runs out the TV offers **Get a new code**, and once paired it opens FireDev by itself.
 If the TV can't start the interface, it says why on screen instead of staying blank.
 To point an installed TV at a different service without rebuilding:
 `adb shell am start -n dev.firedev.tv/.MainActivity -e server http://host:8130`.
@@ -146,7 +147,7 @@ handle_path /firedev/* {
 
 Everything is safe to expose: `/alexa` only answers requests Alexa signed for your skill (`server.alexa_skill_id`)
 from an account linked on the TV, the API, `/mcp` and `/ws` need a paired token, a new TV only gets a pairing
-code (at most 16 wait at once, and a code is never reused while live), and only `firedev pair` on the service
+code (at most 16 wait at once, a code is never reused while live, and it is only ever shown to the TV holding its random pairing claim), and only `firedev pair` on the service
 machine turns a code into a token.
 
 ### 6. Talk to it

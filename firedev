@@ -1,4 +1,13 @@
 #!/usr/bin/env bash
-# FireDev command line. Uses the project's virtualenv (create it with tools/setup.sh).
+# FireDev command line. Uses the project's virtualenv (create it with tools/setup.sh); install it on PATH with
+# tools/install-cli.sh. Works from any directory, including through a symlink.
 here="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+# Run as another account (sudo, root shell)? Use the config of the account that owns this install.
+if [ -z "${FIREDEV_HOME:-}" ] && [ ! -f "$HOME/.config/firedev/admin.token" ]; then
+  owner_home="$(getent passwd "$(stat -c %U "$here/firedev")" | cut -d: -f6)"
+  if [ -n "$owner_home" ] && [ -d "$owner_home/.config/firedev" ]; then
+    export FIREDEV_HOME="$owner_home/.config/firedev"
+    export FIREDEV_CONFIG="${FIREDEV_CONFIG:-$FIREDEV_HOME/firedev.yaml}"
+  fi
+fi
 PYTHONPATH="$here/backend${PYTHONPATH:+:$PYTHONPATH}" exec "$here/.venv/bin/python" -m firedev "$@"

@@ -28,6 +28,8 @@ class Client:
 
 
 MAX_PENDING_CODES = 16
+PAIRING_TTL = 600     # seconds a code stays valid; the TV says "10 minutes"
+PAIRED_HOLD = 600     # how long a token waits for a TV that dropped off just as it was approved
 
 
 def _hash(token: str) -> str:
@@ -47,7 +49,7 @@ class DeviceStore:
             self.admin_path.write_text(secrets.token_urlsafe(32) + "\n")
             os.chmod(self.admin_path, 0o600)
         self._admin = _hash(self.admin_path.read_text().strip())
-        self.codes: dict[str, dict] = {}
+        self.pairings: dict[str, dict] = {}  # sha256(claim) -> {code, expires, token, live, created}
 
     def _save(self) -> None:
         tmp = self.path.with_suffix(".tmp")
@@ -106,20 +108,70 @@ class DeviceStore:
         return dev
 
     # Pairing: an unpaired TV gets a 6-digit code; `firedev pair <code>` on the server approves it.
-    # Anyone who can reach the service can ask for a code, so a new code never replaces a live one (that would let
-    # a stranger take over the code a TV is showing) and only a few can wait at once.
-    def new_code(self, waiter) -> str | None:
-        self.codes = {c: v for c, v in self.codes.items() if v["expires"] > time.time() and not v["waiter"].done()}
-        if len(self.codes) >= MAX_PENDING_CODES:
-            return None
-        code = f"{secrets.randbelow(1_000_000):06d}"
-        while code in self.codes:
-            code = f"{secrets.randbelow(1_000_000):06d}"
-        self.codes[code] = {"expires": time.time() + 600, "waiter": waiter}
-        return code
+    # The TV holds a random claim (kept across reconnects), and the code belongs to that claim, so a dropped
+    # connection or a heartbeat reconnect gets the same code back until it expires. Anyone who can reach the
+    # service can ask for a code, so a code is only ever handed to its own claim (a stranger can't take over the
+    # one a TV is showing) and only a few can wait at once.
+    def _prune(self) -> None:
+        now = time.time()
+        self.pairings = {k: v for k, v in self.pairings.items()
+                         if (v["token"] and v["paired_at"] + PAIRED_HOLD > now) or (not v["token"] and v["expires"] > now)}
 
-    def take_code(self, code: str):
-        entry = self.codes.pop(code.replace(" ", ""), None)
-        if not entry or entry["expires"] < time.time() or entry["waiter"].done():
+    def pairing(self, claim: str) -> dict | None:
+        """The live pairing for this claim, or a new one. None when too many TVs are waiting."""
+        self._prune()
+        key = _hash("claim:" + claim)
+        entry = self.pairings.get(key)
+        if entry and not entry["token"]:
+            return entry
+        pending = [k for k, v in self.pairings.items() if not v["token"]]
+        if len(pending) >= MAX_PENDING_CODES:
+            idle = sorted((self.pairings[k]["created"], k) for k in pending if self.pairings[k]["live"] == 0)
+            if not idle:
+                return None
+            del self.pairings[idle[0][1]]  # the oldest code nobody is looking at
+        taken = {v["code"] for v in self.pairings.values()}
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        while code in taken:
+            code = f"{secrets.randbelow(1_000_000):06d}"
+        entry = {"key": key, "code": code, "created": time.time(), "expires": time.time() + PAIRING_TTL,
+                 "token": None, "paired_at": 0.0, "live": 0}
+        self.pairings[key] = entry
+        return entry
+
+    def renew_code(self, claim: str) -> dict | None:
+        """Replaces this claim's code with a fresh one (the TV asked, usually after expiry)."""
+        key = _hash("claim:" + claim)
+        old = self.pairings.get(key)
+        if old and not old["token"]:
+            del self.pairings[key]
+        entry = self.pairing(claim)
+        if entry and old and not old["token"]:
+            entry["live"] = old["live"]
+        return entry
+
+    def drop_pairing(self, claim: str) -> None:
+        entry = self.pairings.get(_hash("claim:" + claim))
+        if entry and not entry["token"]:
+            del self.pairings[entry["key"]]
+
+    def approve_code(self, code: str, name: str) -> tuple[dict, str] | None:
+        """Pairs the TV showing `code`: creates its device and holds the token for that TV. Returns (device, key)."""
+        self._prune()
+        code = code.replace(" ", "")
+        entry = next((v for v in self.pairings.values() if v["code"] == code and not v["token"]), None)
+        if not entry or entry["expires"] <= time.time():
             return None
-        return entry["waiter"]
+        token, dev = self.create(name, "tv")
+        entry["token"], entry["paired_at"] = token, time.time()
+        return dev, entry["key"]
+
+    def collect_token(self, claim: str) -> str | None:
+        """The token for an approved claim. Kept until the TV connects with it (see token_delivered), so a TV that
+        drops off between approval and receiving it still gets it on its next connection."""
+        self._prune()
+        entry = self.pairings.get(_hash("claim:" + claim))
+        return entry["token"] if entry and entry["token"] else None
+
+    def token_delivered(self, token: str) -> None:
+        self.pairings = {k: v for k, v in self.pairings.items() if v["token"] != token}

@@ -6,6 +6,9 @@ import asyncio
 import io
 import json
 import logging
+import re
+import secrets
+import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -15,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from . import mcp
 from .alexa import AlexaSkill
 from .alexa_verify import AlexaVerifier, VerificationError
-from .auth import Client, DeviceStore
+from .auth import PAIRING_TTL, Client, DeviceStore
 from .config import Config
 from .service import CommandError, FireDev
 
@@ -23,6 +26,7 @@ log = logging.getLogger("firedev.app")
 ROOT = Path(__file__).resolve().parents[2]
 TV_WEB = ROOT / "tv" / "web"
 COMPANION = ROOT / "companion"
+CLAIM_RE = re.compile(r"^[A-Za-z0-9_-]{22,128}$")
 
 
 def create_app(config: Config, devices: DeviceStore) -> FastAPI:
@@ -31,6 +35,7 @@ def create_app(config: Config, devices: DeviceStore) -> FastAPI:
     verifier = AlexaVerifier(config.settings.alexa_skill_id)
     app = FastAPI(title="FireDev", docs_url=None, redoc_url=None)
     app.state.service = service
+    pair_listeners: dict[str, set[asyncio.Event]] = {}  # pairing key -> TV connections showing that code
 
     def client_from(request: Request) -> Client:
         auth = request.headers.get("authorization", "")
@@ -75,11 +80,12 @@ def create_app(config: Config, devices: DeviceStore) -> FastAPI:
         if client.role != "admin":
             raise HTTPException(403, "Pairing needs the admin token")
         body = await request.json()
-        waiter = devices.take_code(str(body.get("code", "")))
-        if not waiter:
-            raise HTTPException(404, "No TV is showing that code (codes last 10 minutes)")
-        token, dev = devices.create(body.get("name") or "Fire TV", "tv")
-        waiter.set_result(token)
+        approved = devices.approve_code(str(body.get("code", "")), body.get("name") or "Fire TV")
+        if not approved:
+            raise HTTPException(404, "No TV is showing that code. Codes last 10 minutes; check the TV for the current one.")
+        dev, key = approved
+        for ev in pair_listeners.get(key, ()):
+            ev.set()
         return {"ok": True, "device": dev["id"], "name": dev["name"]}
 
     @app.get("/api/devices")
@@ -154,33 +160,91 @@ def create_app(config: Config, devices: DeviceStore) -> FastAPI:
         await websocket.accept()
         token = websocket.query_params.get("token")
         client = devices.authenticate(token)
-        if not client:
-            client, token = await _pair(websocket)
+        if client:
+            devices.token_delivered(token)
+        else:
+            client, token = await _pair(websocket, websocket.query_params.get("pair"))
             if not client:
                 return
         await _session(websocket, client)
 
-    async def _pair(websocket: WebSocket):
-        fut = asyncio.get_running_loop().create_future()
-        code = devices.new_code(fut)
-        if code is None:
+    async def _pair(websocket: WebSocket, claim: str | None):
+        # A TV that sends no claim (older builds) gets one for this connection only: its code ends with it.
+        ephemeral = not (claim and CLAIM_RE.match(claim))
+        if ephemeral:
+            claim = secrets.token_urlsafe(24)
+        token = devices.collect_token(claim)
+        if token:  # approved while this TV was reconnecting
+            await websocket.send_json({"type": "paired", "token": token})
+            return devices.authenticate(token), token
+        entry = devices.pairing(claim)
+        if entry is None:
             await websocket.close(code=1013)  # too many TVs pairing at once: the TV retries with backoff
             return None, None
-        await websocket.send_json({"type": "pairing", "code": code})
+        approved = asyncio.Event()
+
+        def attach(e):
+            e["live"] += 1
+            pair_listeners.setdefault(e["key"], set()).add(approved)
+
+        def detach(e):
+            e["live"] = max(0, e["live"] - 1)
+            listeners = pair_listeners.get(e["key"])
+            if listeners:
+                listeners.discard(approved)
+                if not listeners:
+                    del pair_listeners[e["key"]]
+
+        async def announce(e):
+            await websocket.send_json({"type": "pairing", "code": e["code"], "ttl": PAIRING_TTL,
+                                       "expires_in": max(0, round(e["expires"] - time.time()))})
+
+        attach(entry)
+        await announce(entry)
         recv = asyncio.create_task(websocket.receive_text())
-        while True:
-            done, _ = await asyncio.wait({fut, recv}, return_when=asyncio.FIRST_COMPLETED)
-            if fut in done:
-                recv.cancel()
-                token = fut.result()
-                await websocket.send_json({"type": "paired", "token": token})
-                return devices.authenticate(token), token
-            try:
-                recv.result()
-            except (WebSocketDisconnect, RuntimeError):
-                fut.cancel()
-                return None, None
-            recv = asyncio.create_task(websocket.receive_text())
+        waiting = asyncio.create_task(approved.wait())
+        expired_sent = False
+        try:
+            while True:
+                timeout = None if expired_sent else max(0.0, entry["expires"] - time.time())
+                done, _ = await asyncio.wait({recv, waiting}, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+                if waiting in done:
+                    token = devices.collect_token(claim)
+                    if token:
+                        await websocket.send_json({"type": "paired", "token": token})
+                        return devices.authenticate(token), token
+                    approved.clear()
+                    waiting = asyncio.create_task(approved.wait())
+                    continue
+                if not done:  # the code ran out while the TV was showing it
+                    expired_sent = True
+                    await websocket.send_json({"type": "pairing_expired"})
+                    continue
+                try:
+                    msg = json.loads(recv.result())
+                except (WebSocketDisconnect, RuntimeError):
+                    return None, None
+                except ValueError:
+                    msg = {}
+                recv = asyncio.create_task(websocket.receive_text())
+                op = msg.get("op") if isinstance(msg, dict) else None
+                if op == "ping":  # the TV's heartbeat: unanswered, it would reconnect (and used to get a new code)
+                    await websocket.send_json({"type": "pong"})
+                elif op == "new_code":
+                    detach(entry)
+                    fresh = devices.renew_code(claim)
+                    if fresh is None:
+                        await websocket.close(code=1013)
+                        return None, None
+                    entry, expired_sent = fresh, False
+                    attach(entry)
+                    await announce(entry)
+        finally:
+            recv.cancel()
+            waiting.cancel()
+            detach(entry)
+            if ephemeral:
+                devices.drop_pairing(claim)
 
     async def _session(websocket: WebSocket, client: Client):
         q = service.bus.subscribe()

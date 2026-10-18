@@ -4,6 +4,18 @@
  */
 
 const TOKEN_KEY = 'firedev.token';
+const CLAIM_KEY = 'firedev.pairClaim';
+
+// A random secret this TV keeps while it waits to be paired. The server ties the pairing code to it, so a
+// reconnect brings back the same code instead of a new one.
+function newClaim() {
+  const bytes = new Uint8Array(24);
+  if (window.crypto && window.crypto.getRandomValues) window.crypto.getRandomValues(bytes);
+  else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  let out = '';
+  for (let i = 0; i < bytes.length; i++) out += ('0' + bytes[i].toString(16)).slice(-2);
+  return out;
+}
 
 function storage(k, v) {
   try {
@@ -23,10 +35,12 @@ export function createLink({ server, token, onMessage, onStatus }) {
   let heartbeat = null;
   const waiting = new Map();
   let currentToken = token || storage(TOKEN_KEY);
+  let claim = storage(CLAIM_KEY);
+  if (!claim) { claim = newClaim(); storage(CLAIM_KEY, claim); }
 
   function url() {
     const base = server.replace(/^http/, 'ws').replace(/\/$/, '');
-    return base + '/ws' + (currentToken ? '?token=' + encodeURIComponent(currentToken) : '');
+    return base + '/ws?pair=' + claim + (currentToken ? '&token=' + encodeURIComponent(currentToken) : '');
   }
 
   function connect() {
@@ -53,9 +67,15 @@ export function createLink({ server, token, onMessage, onStatus }) {
       let msg;
       try { msg = JSON.parse(m.data); } catch (e) { return; }
       if (msg.type === 'pong') return;
+      if (msg.type === 'pairing' && currentToken) {
+        currentToken = null; // the saved token was revoked: this TV pairs again
+        storage(TOKEN_KEY, null);
+      }
       if (msg.type === 'paired') {
         currentToken = msg.token;
         storage(TOKEN_KEY, msg.token);
+        claim = newClaim(); // used up: a later unpairing starts from a fresh code
+        storage(CLAIM_KEY, claim);
         try { ws.close(); } catch (e) { /* reconnects with the token */ }
         return;
       }
@@ -110,6 +130,7 @@ export function createLink({ server, token, onMessage, onStatus }) {
     command,
     voice: (text, extra) => send(Object.assign({ op: 'voice', phase: 'final', text }, extra || {})),
     voicePhase: (phase, extra) => send(Object.assign({ op: 'voice', phase }, extra || {})),
+    newCode() { if (!send({ op: 'new_code' })) this.reconnectNow(); },
     reconnectNow() { if (ws) { try { ws.close(); } catch (e) { /* will reconnect */ } } else connect(); },
     forget() { currentToken = null; storage(TOKEN_KEY, null); },
     get token() { return currentToken; },

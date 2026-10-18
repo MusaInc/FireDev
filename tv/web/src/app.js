@@ -27,6 +27,8 @@ export function createApp() {
     status: 'connecting',
     everOnline: false,
     pairingCode: null,
+    pairingExpiresAt: 0,
+    pairingExpired: false,
     client: null,
     home: { projects: [] },
     projects: {},
@@ -125,9 +127,20 @@ export function createApp() {
   // --- server messages -----------------------------------------------------------------------------------
   function onMessage(msg) {
     if (msg.type === 'pairing') {
+      // The same code comes back on every reconnect until it expires; only redraw when it actually changes.
+      const changed = msg.code !== app.pairingCode || app.route.name !== 'center';
       app.status = 'pairing';
       app.pairingCode = msg.code;
-      app.navigate('center');
+      app.pairingExpiresAt = Date.now() + (msg.expires_in != null ? msg.expires_in : 600) * 1000;
+      app.pairingExpired = app.pairingExpiresAt <= Date.now();
+      app.linkDown = false;
+      if (changed) app.navigate('center');
+      else app.render();
+      return;
+    }
+    if (msg.type === 'pairing_expired') {
+      app.pairingExpired = true;
+      app.render();
       return;
     }
     if (msg.type === 'hello') {
@@ -206,11 +219,17 @@ export function createApp() {
   }
 
   function onStatus(s) {
-    const was = app.status;
+    const was = app.status + (app.linkDown ? '~' : '');
     if (s === 'online') app.status = 'online';
-    else if (s === 'offline' || s === 'connecting') app.status = app.status === 'pairing' && s === 'connecting' ? 'pairing' : s;
+    else if (s === 'offline' || s === 'connecting') {
+      // Keep showing a live pairing code through a short reconnect: the server hands the same one back.
+      const keepCode = app.status === 'pairing' && app.pairingCode && app.pairingExpiresAt > Date.now();
+      app.status = keepCode ? 'pairing' : s;
+      app.linkDown = keepCode;
+    }
+    if (s === 'online') app.linkDown = false;
     if (!app.everOnline && app.route.name !== 'center') app.navigate('center');
-    else if (was !== app.status) app.render();
+    else if (was !== app.status + (app.linkDown ? '~' : '')) app.render();
   }
 
   // --- input ---------------------------------------------------------------------------------------------

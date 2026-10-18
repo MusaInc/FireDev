@@ -3,6 +3,7 @@
 import { expect, test } from '@playwright/test';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 
 const tokens = () => JSON.parse(fs.readFileSync(new URL('./.tmp/tokens.json', import.meta.url)));
 const PID = 'e2e';
@@ -225,6 +226,65 @@ test('an unpaired TV shows a pairing code and pairs from the CLI', async ({ page
   expect(r.ok()).toBeTruthy();
   await waitFor(page, () => window.__firedev.route.name === 'home' || window.__firedev.route.name === 'workspace');
   expect(await page.evaluate(() => localStorage.getItem('firedev.token'))).toBeTruthy();
+});
+
+// The installed CLI, pointed at the test service's config and admin token.
+function cli(...args) {
+  const tmp = new URL('./.tmp/', import.meta.url).pathname;
+  try {
+    return { ok: true, out: execFileSync(new URL('../firedev', import.meta.url).pathname, args,
+      { env: { ...process.env, FIREDEV_HOME: tmp + 'home', FIREDEV_CONFIG: tmp + 'firedev.yaml' }, encoding: 'utf8', stdio: 'pipe' }) };
+  } catch (e) { return { ok: false, out: String(e.stderr || '') + String(e.stdout || '') }; }
+}
+async function unpairedTv(page) {
+  await page.goto('/tv/?token=');
+  await page.evaluate(() => localStorage.clear());
+  await page.goto('/tv/');
+  await expect(page.locator('.code-digits')).toBeVisible();
+  return page.evaluate(() => window.__firedev.pairingCode);
+}
+
+test('the pairing code stays the same through heartbeats and reconnects, and shows its expiry', async ({ page }) => {
+  const code = await unpairedTv(page);
+  await expect(page.locator('.pair-countdown')).toHaveText(/valid for (10:00|9:5\d) more/);
+  await page.waitForTimeout(20000); // several heartbeats; the old server dropped the TV (and its code) after 12 s
+  expect(await page.evaluate(() => window.__firedev.pairingCode)).toBe(code);
+  await page.evaluate(() => window.__firedev.link.reconnectNow());
+  await waitFor(page, () => window.__firedev.status === 'pairing' && !window.__firedev.linkDown);
+  expect(await page.evaluate(() => window.__firedev.pairingCode)).toBe(code);
+  await page.reload(); // the app restarting keeps it too
+  await expect(page.locator('.code-digits')).toBeVisible();
+  expect(await page.evaluate(() => window.__firedev.pairingCode)).toBe(code);
+  await expect(page.locator('.pair-countdown')).toHaveText(/valid for 9:[34]\d more/);
+});
+
+test('a wrong code is refused by the CLI and the TV keeps waiting; the right one pairs and opens the app', async ({ page }) => {
+  const code = await unpairedTv(page);
+  const wrong = cli('pair', code === '000000' ? '111111' : '000000');
+  expect(wrong.ok).toBe(false);
+  expect(wrong.out).toContain('No TV is showing that code');
+  expect(await page.evaluate(() => window.__firedev.pairingCode)).toBe(code);
+  const right = cli('pair', code, '--name', 'CLI TV');
+  expect(right.ok).toBe(true);
+  expect(right.out).toContain('Paired CLI TV');
+  await waitFor(page, () => window.__firedev.route.name === 'home' || window.__firedev.route.name === 'workspace');
+  expect(await page.evaluate(() => window.__firedev.client.name)).toBe('CLI TV');
+});
+
+test('an expired code offers a new one from the remote', async ({ page, request }) => {
+  const code = await unpairedTv(page);
+  await page.evaluate(() => { window.__firedev.pairingExpiresAt = Date.now(); }); // as if 10 minutes passed
+  await expect(page.locator('.t-title')).toHaveText('That pairing code has expired');
+  await expect.poll(() => focused(page)).toBe('new-code');
+  await press(page, 'Enter');
+  await expect(page.locator('.code-digits')).toBeVisible();
+  const fresh = await page.evaluate(() => window.__firedev.pairingCode);
+  expect(fresh).not.toBe(code);
+  const old = await request.post('/api/pair', { headers: { Authorization: 'Bearer ' + tokens().admin }, data: { code } });
+  expect(old.status()).toBe(404); // the replaced code no longer pairs
+  const r = await request.post('/api/pair', { headers: { Authorization: 'Bearer ' + tokens().admin }, data: { code: fresh, name: 'Renewed TV' } });
+  expect(r.ok()).toBeTruthy();
+  await waitFor(page, () => window.__firedev.route.name === 'home' || window.__firedev.route.name === 'workspace');
 });
 
 // A TV WebView whose CSS viewport is smaller than 1920×1080 (960×540 on most 1080p TVs) must show the whole
