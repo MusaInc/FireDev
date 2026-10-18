@@ -9,6 +9,7 @@ import json
 import logging
 import re
 import secrets
+import socket
 import time
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from .alexa_verify import AlexaVerifier, VerificationError
 from .auth import PAIRING_TTL, Client, DeviceStore
 from .config import Config
 from .gateway import Gateway, serve_gateway
+from . import lan
 from .service import CommandError, FireDev
 
 log = logging.getLogger("firedev.app")
@@ -36,18 +38,32 @@ def create_app(config: Config, devices: DeviceStore) -> FastAPI:
     skill = AlexaSkill(service, devices)
     verifier = AlexaVerifier(config.settings.alexa_skill_id)
     gateway = Gateway(service.previews)
+    st = config.settings
+    tls = lan.ensure_cert(devices.home) if st.lan else None
+    machine_name = st.name or socket.gethostname().split(".")[0]
 
     @contextlib.asynccontextmanager
     async def lifespan(_app):
         service.previews.start()
         # The live-preview gateway is a second listener: its own origin, so previews can't reach FireDev's interface.
-        server = await serve_gateway(gateway, config.settings.host, config.settings.preview_port) if config.settings.preview_port else None
+        servers = [await serve_gateway(gateway, st.host, st.preview_port) if st.preview_port else None]
+        announcer = None
+        if tls:
+            # LAN mode: the API and the previews on the local network, TLS only, and an mDNS announcement.
+            cert, key, fp = tls
+            servers.append(await lan.serve_tls(app, "0.0.0.0", st.lan_port, cert, key, "API"))
+            servers.append(await lan.serve_tls(gateway, "0.0.0.0", st.lan_preview_port, cert, key, "previews"))
+            announcer = lan.Announcer(machine_name, st.lan_port, st.lan_preview_port, fp, devices.machine_id())
+            await announcer.start()
         try:
             yield
         finally:
             await service.previews.stop()
-            if server:
-                server.should_exit = True
+            if announcer:
+                await announcer.stop()
+            for server in servers:
+                if server:
+                    server.should_exit = True
 
     app = FastAPI(title="FireDev", docs_url=None, redoc_url=None, lifespan=lifespan)
     app.state.gateway = gateway
@@ -65,6 +81,13 @@ def create_app(config: Config, devices: DeviceStore) -> FastAPI:
     @app.get("/")
     async def index():
         return RedirectResponse("tv/")  # relative, so it also works under a path prefix
+
+    @app.get("/api/info")
+    async def info():
+        """What a TV may know before pairing: which machine this is and how its pairing is protected."""
+        return {"name": machine_name, "id": devices.machine_id(), "version": "0.3.0", "lan": bool(tls),
+                "fingerprint": tls[2] if tls else None, "preview_port": st.preview_port,
+                "lan_port": st.lan_port if tls else None, "lan_preview_port": st.lan_preview_port if tls else None}
 
     @app.get("/api/health")
     async def health():
@@ -194,7 +217,9 @@ def create_app(config: Config, devices: DeviceStore) -> FastAPI:
         if token:  # approved while this TV was reconnecting
             await websocket.send_json({"type": "paired", "token": token})
             return devices.authenticate(token), token
-        entry = devices.pairing(claim)
+        # Over the LAN listener (TLS), the code is tied to this machine's certificate.
+        bind = tls[2] if tls and websocket.scope.get("scheme") == "wss" else None
+        entry = devices.pairing(claim, bind)
         if entry is None:
             await websocket.close(code=1013)  # too many TVs pairing at once: the TV retries with backoff
             return None, None
@@ -213,7 +238,8 @@ def create_app(config: Config, devices: DeviceStore) -> FastAPI:
                     del pair_listeners[e["key"]]
 
         async def announce(e):
-            await websocket.send_json({"type": "pairing", "code": e["code"], "ttl": PAIRING_TTL,
+            await websocket.send_json({"type": "pairing", "code": e["code"], "ttl": PAIRING_TTL, "nonce": e.get("nonce"),
+                                       "bound": bool(e.get("bind")), "machine": machine_name,
                                        "expires_in": max(0, round(e["expires"] - time.time()))})
 
         attach(entry)
@@ -249,7 +275,7 @@ def create_app(config: Config, devices: DeviceStore) -> FastAPI:
                     await websocket.send_json({"type": "pong"})
                 elif op == "new_code":
                     detach(entry)
-                    fresh = devices.renew_code(claim)
+                    fresh = devices.renew_code(claim, bind)
                     if fresh is None:
                         await websocket.close(code=1013)
                         return None, None

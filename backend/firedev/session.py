@@ -27,7 +27,7 @@ from .agents import make_adapter
 from .agents.base import BRIEF_VERSION
 from .speech import clean_for_speech, spoken_text
 from .config import Action, Project
-from .ssh import Remote, RemoteError
+from .ssh import RemoteError, make_remote
 
 if TYPE_CHECKING:
     from .service import FireDev
@@ -120,7 +120,7 @@ class ProjectSession:
         self.service = service
         self.bus = service.bus
         self.project = project
-        self.remote = Remote(project.machine)
+        self.remote = make_remote(project.machine)
         self.adapter = make_adapter(project.agent, project.agent_options)
         self.conn_state = "disconnected"
         self.conn_message = ""

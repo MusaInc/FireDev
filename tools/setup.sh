@@ -7,8 +7,8 @@ python3 -m venv .venv
 if command -v npm >/dev/null; then npm install --no-audit --no-fund --silent && npm run build --silent; fi
 mkdir -p ~/.config/firedev && chmod 700 ~/.config/firedev
 if [ ! -f ~/.config/firedev/firedev.yaml ]; then
-  cp config/firedev.example.yaml ~/.config/firedev/firedev.yaml
+  # Local-first: this computer is the machine (no SSH to itself), and TVs on the same Wi-Fi find it.
+  ./firedev init
   chmod 600 ~/.config/firedev/firedev.yaml
-  echo "Wrote ~/.config/firedev/firedev.yaml: edit the machine and project, then run ./firedev serve"
 fi
-echo "FireDev is set up. Next: ./firedev serve"
+echo "FireDev is set up. Next: ./firedev add ~/code/my-app, then ./firedev serve"

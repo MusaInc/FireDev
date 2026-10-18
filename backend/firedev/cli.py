@@ -1,7 +1,11 @@
 """firedev — command line for the FireDev service.
 
+  firedev init [--lan|--no-lan]     first-time setup on this computer: config, this machine, LAN mode
+  firedev add [path] [--agent A]    add a project (default: the current folder) on this machine
   firedev serve                     start the service (TV WebSocket, phone mic, MCP, Alexa)
+  firedev up [--json]               start the service in the background if it isn't running; print how to reach it
   firedev pair <code> [--name N]    pair the TV showing <code>
+  firedev pair --issue [--name N]   a TV token for a TV that logged in over SSH (used by the Fire TV app)
   firedev devices                   list paired devices (TVs, phones, linked Alexa accounts)
   firedev unpair <device-id>        remove one, e.g. to unlink Alexa
   firedev add-assistant <name>      create a token for an MCP client
@@ -18,6 +22,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -29,6 +34,7 @@ from . import config as cfg
 from .auth import DeviceStore
 
 ROOT = Path(__file__).resolve().parents[2]
+from shlex import quote as shlex_quote  # noqa: E402
 
 
 def _base_url(c: cfg.Config) -> str:
@@ -74,8 +80,101 @@ def cmd_serve(args, c: cfg.Config) -> None:
 
 
 def cmd_pair(args, c):
+    if args.issue:
+        # The Fire TV app logged in over SSH as this machine's user, which is the proof pairing is for.
+        r = _call(c, "POST", "/api/devices", {"name": args.name, "role": "tv"})
+        print(json.dumps({"token": r["token"], "device": r["device"]["id"], "port": c.settings.port,
+                          "preview_port": c.settings.preview_port}) if args.json else r["token"])
+        return
+    if not args.code:
+        sys.exit("firedev: give the code the TV shows, e.g. firedev pair 123456")
     r = _call(c, "POST", "/api/pair", {"code": args.code, "name": args.name})
     print(f"Paired {r['name']} ({r['device']}).")
+
+
+def _health(c: cfg.Config) -> dict | None:
+    for path in ("/api/info", "/api/health"):  # an older FireDev has no /api/info
+        try:
+            with urllib.request.urlopen(_base_url(c) + path, timeout=3) as r:
+                data = json.loads(r.read())
+                return data if path == "/api/info" else {"name": os.uname().nodename, "lan": False, **data}
+        except (urllib.error.URLError, OSError, ValueError):
+            continue
+    return None
+
+
+def cmd_up(args, c):
+    """Makes sure the service runs (in a tmux session firedev-service-<port>, or detached with a log)."""
+    import time as _time
+    info = _health(c)
+    started = False
+    if not info:
+        log = cfg.DEFAULT_HOME / "service.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        exe = [sys.executable, "-m", "firedev"] + (["--config", args.config] if args.config else []) + ["serve"]
+        env = dict(os.environ, PYTHONPATH=str(ROOT / "backend") + os.pathsep + os.environ.get("PYTHONPATH", ""))
+        if shutil.which("tmux"):
+            # A running tmux server keeps its own environment: pass FireDev's settings on the command line.
+            keep = {k: env[k] for k in ("FIREDEV_HOME", "FIREDEV_CONFIG", "PYTHONPATH") if env.get(k)}
+            cmd = "env " + " ".join(f"{k}={shlex_quote(v)}" for k, v in keep.items()) + " " + \
+                " ".join(shlex_quote(x) for x in exe) + f" >> {shlex_quote(str(log))} 2>&1"
+            subprocess.run(["tmux", "new-session", "-d", "-s", f"firedev-service-{c.settings.port}", f"cd {shlex_quote(str(ROOT))} && " + cmd],
+                           env=env, check=False)
+        else:
+            subprocess.Popen(exe, stdout=log.open("a"), stderr=subprocess.STDOUT, start_new_session=True, env=env, cwd=str(ROOT))
+        started = True
+        for _ in range(60):
+            _time.sleep(0.5)
+            info = _health(c)
+            if info:
+                break
+    if not info:
+        sys.exit(f"firedev: the service didn't start; see {cfg.DEFAULT_HOME / 'service.log'}")
+    out = {"ok": True, "started": started, "port": c.settings.port, "preview_port": c.settings.preview_port, **info}
+    if args.json:
+        print(json.dumps(out))
+    else:
+        print(f"FireDev is running on {info['name']} (port {c.settings.port}{', LAN on' if info.get('lan') else ''}).")
+
+
+def cmd_init(args, c):
+    """First run on a computer: a config with this machine (no SSH needed) and LAN mode for TVs on the same Wi-Fi."""
+    path = Path(args.config).expanduser() if args.config else cfg.DEFAULT_CONFIG
+    if path.exists() and not args.force:
+        print(f"{path} already exists. Add projects with `firedev add <folder>`; `firedev init --force` starts over.")
+        return
+    import yaml
+    raw = {"server": {"host": "127.0.0.1", "port": 8130, "lan": not args.no_lan},
+           "machines": {"this-computer": {"local": True}}, "projects": []}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("# FireDev on this computer. `firedev add <folder>` adds projects; `firedev serve` starts it.\n"
+                    + yaml.safe_dump(raw, sort_keys=False))
+    print(f"Wrote {path}.")
+    print("Next: `firedev add ~/code/my-app`, then `firedev serve`, then open FireDev on your TV" +
+          (" on the same Wi-Fi: it finds this computer by itself." if not args.no_lan else "."))
+
+
+def cmd_add(args, c):
+    import yaml
+    path = Path(args.config).expanduser() if args.config else cfg.DEFAULT_CONFIG
+    if not path.exists():
+        sys.exit("firedev: no config yet. Run `firedev init` first.")
+    folder = Path(args.path or ".").expanduser().resolve()
+    if not folder.is_dir():
+        sys.exit(f"firedev: {folder} isn't a folder")
+    raw = yaml.safe_load(path.read_text()) or {}
+    projects = raw.setdefault("projects", [])
+    pid = re.sub(r"[^a-z0-9-]+", "-", (args.id or folder.name).lower()).strip("-")[:40] or "project"
+    if any(p.get("id") == pid for p in projects):
+        sys.exit(f"firedev: there is already a project called {pid}; use --id")
+    machine = args.machine or next((m for m, v in (raw.get("machines") or {}).items() if (v or {}).get("local")), "local")
+    home = str(Path.home())
+    shown = "~" + str(folder)[len(home):] if str(folder).startswith(home + "/") else str(folder)
+    projects.append({"id": pid, "name": args.name or folder.name.replace("-", " ").replace("_", " ").title(), "machine": machine,
+                     "path": shown, "agent": args.agent})
+    cfg.parse(raw)  # refuses anything invalid before writing
+    path.write_text(yaml.safe_dump(raw, sort_keys=False))
+    print(f"Added {pid} ({shown}, {args.agent}). Restart `firedev serve` to see it on the TV.")
 
 
 def cmd_devices(args, c):
@@ -180,8 +279,15 @@ def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="firedev", description="FireDev: a voice-first development workstation for Fire TV")
     p.add_argument("--config", help="config file (default ~/.config/firedev/firedev.yaml)")
     sub = p.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("init"); s.add_argument("--no-lan", action="store_true", help="don't listen on the local network")
+    s.add_argument("--force", action="store_true"); s.set_defaults(fn=cmd_init)
+    s = sub.add_parser("add"); s.add_argument("path", nargs="?"); s.add_argument("--agent", default="codex", choices=sorted(cfg.AGENTS))
+    s.add_argument("--id"); s.add_argument("--name"); s.add_argument("--machine"); s.set_defaults(fn=cmd_add)
     s = sub.add_parser("serve"); s.add_argument("--host"); s.add_argument("--port", type=int); s.set_defaults(fn=cmd_serve)
-    s = sub.add_parser("pair"); s.add_argument("code"); s.add_argument("--name", default="Fire TV"); s.set_defaults(fn=cmd_pair)
+    s = sub.add_parser("up"); s.add_argument("--json", action="store_true"); s.set_defaults(fn=cmd_up)
+    s = sub.add_parser("pair"); s.add_argument("code", nargs="?"); s.add_argument("--name", default="Fire TV")
+    s.add_argument("--issue", action="store_true", help="print a new TV token (for a TV that logged in over SSH)")
+    s.add_argument("--json", action="store_true"); s.set_defaults(fn=cmd_pair)
     s = sub.add_parser("devices"); s.set_defaults(fn=cmd_devices)
     s = sub.add_parser("unpair"); s.add_argument("device"); s.set_defaults(fn=cmd_unpair)
     s = sub.add_parser("add-assistant"); s.add_argument("name"); s.add_argument("--role", default="assistant", choices=["assistant", "tv", "voice"]); s.set_defaults(fn=cmd_add_assistant)
@@ -193,7 +299,7 @@ def main(argv: list[str] | None = None) -> None:
     s = sub.add_parser("demo"); s.add_argument("action", choices=["setup", "reset"]); s.add_argument("--project", default="pulse")
     s.add_argument("--keep-thread", action="store_true", help="keep the agent's conversation"); s.set_defaults(fn=cmd_demo)
     args = p.parse_args(argv)
-    if args.cmd == "demo" and not (Path(args.config).expanduser() if args.config else cfg.DEFAULT_CONFIG).exists():
+    if args.cmd in ("demo", "init") and not (Path(args.config).expanduser() if args.config else cfg.DEFAULT_CONFIG).exists():
         c = cfg.parse({})
     else:
         try:

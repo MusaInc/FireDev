@@ -322,6 +322,13 @@ async def enter(g):
     r = await c.get(f"/__firedev/enter?t={t}")
     assert r.status_code == 303 and r.headers["location"] == "/"
     assert "httponly" in r.headers["set-cookie"].lower()
+    # 127.0.0.1 (the TV app's relay) is a secure context: the cookie must work in a third-party frame.
+    assert "samesite=none" in r.headers["set-cookie"].lower() and "secure" in r.headers["set-cookie"].lower()
+    # Browsers send Secure cookies to 127.0.0.1 over http; httpx doesn't, so carry it by hand.
+    sid = r.headers["set-cookie"].split(";")[0].split("=", 1)[1]
+    c.cookies.clear()
+    c.cookies.set(COOKIE, sid)
+    c.headers["cookie"] = f"{COOKIE}={sid}"
     return c
 
 
@@ -478,6 +485,21 @@ def test_who_needs_approval_to_start_a_server(tmp_path):
     assert m.start_level(vite, "tv") == 1 and m.start_level(vite, "voice") == 1
     assert m.start_level(Preview("web", framework="static"), "agent") == 0
     assert m.start_level(Preview("web", framework="static", needs_install=True), "tv") == 2
+
+
+def test_never_adopts_another_installs_server(tmp_path):
+    """Two FireDev installs on one machine with the same project id share ~/.firedev/projects/<id>: the preview's
+    meta says whose it is."""
+    svc, _ = make_service(tmp_path)
+    svc.sessions["web"].path = "/home/me/web"
+    p = svc.previews.previews["web"]
+    theirs = raw({}, {"index.html"}, ports=[])
+    theirs.update(meta={"port": 5389, "framework": "static", "project_path": "/tmp/other/web"}, window=True, all_ports={5389})
+    svc.previews._apply(p, theirs, plan(theirs, "/home/me/web"))
+    assert p.status == "idle" and not p.managed
+    ours = dict(theirs, meta={"port": 5389, "framework": "static", "project_path": "/home/me/web"})
+    svc.previews._apply(p, ours, plan(ours, "/home/me/web"))
+    assert p.status == "running" and p.managed and p.port == 5389
 
 
 def test_preview_dataclass_snapshot():

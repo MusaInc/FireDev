@@ -1,4 +1,5 @@
-"""SSH connections to development machines (asyncssh), shared by every project on the same machine."""
+"""Connections to development machines: SSH (asyncssh) to another machine, or LocalRemote when FireDev runs on the
+machine itself (the local-first setup: `firedev serve` next to the code, no SSH to itself)."""
 
 from __future__ import annotations
 
@@ -27,6 +28,7 @@ class Remote:
         self.home: str = ""
         self._lock = asyncio.Lock()
         self._lost = asyncio.Event()
+        self.generation = 0  # bumps on every new connection, so port forwards know to rebuild
 
     @property
     def connected(self) -> bool:
@@ -70,6 +72,7 @@ class Remote:
             except (OSError, asyncssh.Error) as e:
                 raise RemoteError(_friendly(e)) from e
             self.conn = conn
+            self.generation += 1
             self._lost = asyncio.Event()
             asyncio.get_running_loop().create_task(self._watch(conn))
             res = await conn.run("printf %s \"$HOME\"", check=False)
@@ -136,6 +139,19 @@ class Remote:
             if not proc.is_closing():
                 proc.close()
 
+    async def read_bytes(self, path: str, limit: int = 8_000_000) -> bytes:
+        if not self.connected:
+            raise RemoteError("not connected")
+        res = await self.conn.run(f"head -c {int(limit)} {shlex.quote(path)}", encoding=None, check=False)
+        return bytes(res.stdout or b"")
+
+    async def forward(self, port: int) -> tuple[int, object]:
+        """A local port that reaches 127.0.0.1:<port> on the machine, and the listener to close it."""
+        if not self.connected:
+            raise RemoteError("not connected")
+        listener = await self.conn.forward_local_port("127.0.0.1", 0, "127.0.0.1", port)
+        return listener.get_port(), listener
+
     async def write_file(self, path: str, content: str, mode: str | None = None) -> None:
         cmd = f"mkdir -p {shlex.quote(os.path.dirname(path))} && cat > {shlex.quote(path)}.tmp && mv {shlex.quote(path)}.tmp {shlex.quote(path)}"
         if mode:
@@ -155,3 +171,115 @@ def _friendly(e: BaseException) -> str:
     if isinstance(e, OSError) and e.strerror:
         return e.strerror
     return str(e) or e.__class__.__name__
+
+
+class LocalRemote:
+    """The machine FireDev itself runs on: the same interface as Remote, with local processes instead of SSH."""
+
+    def __init__(self, machine: Machine) -> None:
+        self.machine = machine
+        self.home = str(Path.home())
+        self.generation = 0
+        self._up = False
+        self._lost = asyncio.Event()
+        self._procs: set[asyncio.subprocess.Process] = set()
+
+    @property
+    def connected(self) -> bool:
+        return self._up and not self._lost.is_set()
+
+    @property
+    def conn(self):
+        return self if self.connected else None
+
+    async def connect(self) -> None:
+        if self.connected:
+            return
+        self._lost = asyncio.Event()
+        self._up = True
+        self.generation += 1
+
+    async def wait_lost(self) -> None:
+        await self._lost.wait()
+
+    def drop(self) -> None:
+        """Simulates a lost connection (tests): running streams end, and the session reconnects."""
+        self._lost.set()
+        self._up = False
+        for p in list(self._procs):
+            if p.returncode is None:
+                p.kill()
+
+    async def close(self) -> None:
+        self._up = False
+        for p in list(self._procs):
+            if p.returncode is None:
+                p.kill()
+
+    def expand(self, path: str) -> str:
+        if path == "~" or path.startswith("~/"):
+            return self.home + path[1:]
+        return path
+
+    async def _spawn(self, command: str, stdin: bool) -> asyncio.subprocess.Process:
+        if not self.connected:
+            raise RemoteError("not connected")
+        p = await asyncio.create_subprocess_exec("bash", "-c", command, cwd=self.home, start_new_session=True,
+                                                 stdin=asyncio.subprocess.PIPE if stdin else asyncio.subprocess.DEVNULL,
+                                                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        self._procs.add(p)
+        return p
+
+    async def run(self, command: str, *, input: str | None = None, timeout: float = 30, check: bool = False) -> tuple[int, str, str]:
+        p = await self._spawn(command, input is not None)
+        try:
+            out, err = await asyncio.wait_for(p.communicate(input.encode() if input is not None else None), timeout)
+        except asyncio.TimeoutError as e:
+            p.kill()
+            raise RemoteError(f"timed out: {command[:80]}") from e
+        finally:
+            self._procs.discard(p)
+        code = p.returncode if p.returncode is not None else -1
+        o, e2 = out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
+        if check and code != 0:
+            raise RemoteError(f"{command[:80]} failed ({code}): {e2.strip()[:300] or o.strip()[:300]}")
+        return code, o, e2
+
+    async def stream(self, command: str) -> AsyncIterator[str]:
+        p = await self._spawn(command, False)
+        dec = __import__("codecs").getincrementaldecoder("utf-8")("replace")
+        try:
+            while True:
+                chunk = await p.stdout.read(8192)
+                if not chunk:
+                    break
+                text = dec.decode(chunk)
+                if text:
+                    yield text
+        finally:
+            self._procs.discard(p)
+            if p.returncode is None:
+                try:
+                    p.kill()
+                except ProcessLookupError:
+                    pass
+
+    async def read_bytes(self, path: str, limit: int = 8_000_000) -> bytes:
+        with open(self.expand(path), "rb") as f:
+            return f.read(limit)
+
+    async def forward(self, port: int) -> tuple[int, object]:
+        return port, None  # the dev server is on this machine already
+
+    async def write_file(self, path: str, content: str, mode: str | None = None) -> None:
+        p = Path(self.expand(path))
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_name(p.name + ".tmp")
+        tmp.write_text(content)
+        if mode:
+            os.chmod(tmp, int(mode, 8))
+        tmp.replace(p)
+
+
+def make_remote(machine: Machine):
+    return LocalRemote(machine) if machine.local else Remote(machine)

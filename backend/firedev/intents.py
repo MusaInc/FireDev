@@ -169,7 +169,7 @@ def parse(text: str, projects: list[dict], context: dict | None = None) -> Inten
         return Intent("get_status", "Project status")
     if _ACTIVITY.search(t):
         return Intent("show_activity", "Show activity")
-    if _DIFF.search(t) and not _FIX.search(t):
+    if _DIFF.search(t) and not _FIX.search(t) and not re.search(r"\b(dashboard|overview|chart|graph|diagram|visuali[sz]e)\b", t):
         return Intent("show_changes", "Show what changed")
 
     m = _OPEN.match(t)

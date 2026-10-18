@@ -7,8 +7,10 @@ variable named in the config.
 
 from __future__ import annotations
 
+import getpass
 import os
 import re
+import socket
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -38,6 +40,7 @@ class Machine:
     password_env: str | None = None
     known_hosts: str | None = "~/.ssh/known_hosts"
     label: str | None = None
+    local: bool = False  # this machine: FireDev runs commands directly, no SSH
 
     @property
     def display(self) -> str:
@@ -96,6 +99,12 @@ class Settings:
     # address (where the TV reaches it, e.g. a port the TV app forwards); unset, TVs use the server's host with preview_port.
     preview_port: int = 8132
     preview_url: str | None = None
+    # LAN mode: also listen on the local network with TLS (lan_port for the API, lan_preview_port for previews) and
+    # announce this machine with mDNS, so a TV on the same Wi-Fi finds it. Pairing codes are tied to the certificate.
+    lan: bool = False
+    lan_port: int = 8134
+    lan_preview_port: int = 8135
+    name: str | None = None  # how TVs list this machine (default: the host name)
 
 
 @dataclass
@@ -123,6 +132,10 @@ def parse(raw: dict, path: Path | None = None) -> Config:
         remote_approval=str(s.get("remote_approval", "tv")),
         alexa_skill_id=(str(s["alexa_skill_id"]).strip() or None) if s.get("alexa_skill_id") else None,
         preview_port=int(s.get("preview_port", 8132)),
+        lan=bool(s.get("lan", False)),
+        lan_port=int(s.get("lan_port", 8134)),
+        lan_preview_port=int(s.get("lan_preview_port", 8135)),
+        name=str(s["name"]) if s.get("name") else None,
         preview_url=(str(s["preview_url"]).rstrip("/") or None) if s.get("preview_url") else None,
     )
     if settings.remote_approval not in {"tv", "level2"}:
@@ -131,6 +144,11 @@ def parse(raw: dict, path: Path | None = None) -> Config:
     machines: dict[str, Machine] = {}
     for mid, m in (raw.get("machines") or {}).items():
         where = f"machines.{mid}"
+        m = m or {}
+        if m.get("local"):
+            machines[mid] = Machine(id=mid, host="localhost", user=getpass.getuser(), label=m.get("label") or settings.name or socket.gethostname(),
+                                    local=True, known_hosts=None)
+            continue
         auth = str(m.get("auth", "key"))
         if auth not in AUTH_METHODS:
             raise ConfigError(f"{where}: auth must be one of {sorted(AUTH_METHODS)}")
@@ -158,7 +176,11 @@ def parse(raw: dict, path: Path | None = None) -> Config:
             raise ConfigError(f"{where}: id must be lowercase letters, digits and dashes")
         if pid in projects:
             raise ConfigError(f"{where}: duplicate project id '{pid}'")
-        mid = str(_require(p, "machine", where))
+        mid = str(p.get("machine") or "local")
+        if mid == "local" and mid not in machines:
+            # The machine FireDev runs on, with no SSH: the local-first default.
+            machines[mid] = Machine(id="local", host="localhost", user=getpass.getuser(), label=settings.name or socket.gethostname(), local=True,
+                                    known_hosts=None)
         if mid not in machines:
             raise ConfigError(f"{where}: unknown machine '{mid}'")
         agent = str(p.get("agent", "codex"))

@@ -67,6 +67,9 @@
       post({ fd: 'focus', label: label(el), tag: el.tagName.toLowerCase(), href: el.getAttribute('href') || null });
     }
     draw();
+    // Pages with smooth scrolling are still moving: follow them to where they stop.
+    setTimeout(draw, 250);
+    setTimeout(draw, 700);
   }
 
   function nearest(dir) {

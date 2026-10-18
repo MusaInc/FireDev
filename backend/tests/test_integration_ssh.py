@@ -51,14 +51,15 @@ def make_fixture(root: Path) -> Path:
     return p
 
 
-@pytest.fixture
-async def fd(tmp_path):
+@pytest.fixture(params=["ssh", "local"])
+async def fd(tmp_path, request):
     proj = make_fixture(tmp_path)
     sess = f"firedev-test-{os.getpid()}-{tmp_path.name[-6:]}"
     raw = {
         "server": {"data_dir": str(tmp_path / "data")},
+        # The same journeys over SSH and with FireDev running on the machine itself (no SSH).
         "machines": {"local": {"host": "localhost", "user": os.environ.get("USER", "abdul"), "auth": "key",
-                               "key_file": "~/.config/firedev/keys/firedev_ed25519"}},
+                               "key_file": "~/.config/firedev/keys/firedev_ed25519"} if request.param == "ssh" else {"local": True}},
         "projects": [{"id": "fx", "name": "Fixture App", "machine": "local", "path": str(proj), "agent": "codex",
                       "tmux_session": sess, "agent_options": {"binary": FAKE},
                       "actions": {

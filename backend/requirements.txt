@@ -3,7 +3,8 @@ uvicorn[standard]>=0.29
 asyncssh>=2.14
 pyyaml>=6
 qrcode>=7.4
-cryptography>=42      # Alexa request signatures
+cryptography>=42      # Alexa request signatures, the LAN certificate
+zeroconf>=0.130       # LAN mode: TVs find this machine
 # tests
 pytest>=8
 pytest-asyncio>=0.23

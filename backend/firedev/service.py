@@ -474,8 +474,21 @@ class FireDev:
     async def _cmd_voice_link(self, args, client):
         if client.role not in ("tv", "admin"):
             raise CommandError("Only the TV can create a phone microphone link")
+        st = self.config.settings
+        base = (st.public_url or "").rstrip("/")
+        if not base and st.lan:
+            # Local-first: the phone on the same Wi-Fi reaches this computer's LAN listener directly.
+            from .lan import lan_addresses
+            addrs = lan_addresses()
+            base = f"https://{addrs[0]}:{st.lan_port}" if addrs else ""
+        if not base:
+            b = args.get("base") or ""
+            if b and "127.0.0.1" not in b and "localhost" not in b:
+                base = b.rstrip("/")
+        if not base:
+            return {"ok": False, "message": "The phone page needs this machine on your Wi-Fi (LAN mode) or a public HTTPS address. "
+                                            "Over SSH, use the TV's microphone."}
         token, dev = self.devices.create(args.get("name") or "Phone microphone", "voice", ttl=12 * 3600)
-        base = (self.config.settings.public_url or args.get("base") or "").rstrip("/")
         return {"ok": True, "url": f"{base}/voice#t={token}", "device": dev["id"], "expires_in_hours": 12}
 
     # --- live preview -----------------------------------------------------------------------------------------
@@ -506,7 +519,7 @@ class FireDev:
         shots = bool(args.get("screenshots")) and bool(p.screenshots)
         if p.status != "running" and not shots:
             return {"ok": True, "preview": p.to_dict(), "url": None}
-        base = self.previews.gateway_base(args.get("base"))
+        base = self.previews.gateway_base(args.get("base"), args.get("preview_base"))
         if not base:
             return {"ok": False, "preview": p.to_dict(), "url": None,
                     "message": "The preview gateway has no public address. Set server.preview_url in firedev.yaml."}

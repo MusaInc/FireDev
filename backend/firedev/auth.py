@@ -32,6 +32,12 @@ PAIRING_TTL = 600     # seconds a code stays valid; the TV says "10 minutes"
 PAIRED_HOLD = 600     # how long a token waits for a TV that dropped off just as it was approved
 
 
+def bound_code(fingerprint: str, claim: str, nonce: str) -> str:
+    """The 6-digit pairing code for a TLS-bound pairing. The TV app computes the same from the certificate it pinned."""
+    digest = hashlib.sha256(f"firedev-pair:{fingerprint.lower()}:{claim}:{nonce}".encode()).hexdigest()
+    return f"{int(digest[:15], 16) % 1_000_000:06d}"
+
+
 def _hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
@@ -50,6 +56,13 @@ class DeviceStore:
             os.chmod(self.admin_path, 0o600)
         self._admin = _hash(self.admin_path.read_text().strip())
         self.pairings: dict[str, dict] = {}  # sha256(claim) -> {code, expires, token, live, created}
+
+    def machine_id(self) -> str:
+        """A stable random id for this FireDev install, so a TV recognises the same machine at a new address."""
+        p = self.home / "machine-id"
+        if not p.exists():
+            p.write_text(secrets.token_hex(8))
+        return p.read_text().strip()
 
     def _save(self) -> None:
         tmp = self.path.with_suffix(".tmp")
@@ -117,12 +130,17 @@ class DeviceStore:
         self.pairings = {k: v for k, v in self.pairings.items()
                          if (v["token"] and v["paired_at"] + PAIRED_HOLD > now) or (not v["token"] and v["expires"] > now)}
 
-    def pairing(self, claim: str) -> dict | None:
-        """The live pairing for this claim, or a new one. None when too many TVs are waiting."""
+    def pairing(self, claim: str, bind: str | None = None) -> dict | None:
+        """The live pairing for this claim, or a new one. None when too many TVs are waiting.
+
+        bind: the fingerprint of the TLS certificate this TV connected through (LAN mode). The code is then derived
+        from that fingerprint, the TV's claim and a fresh nonce, and the TV computes it itself from the certificate it
+        saw. Behind a man in the middle the TV shows a different code than the one this machine accepts, so the
+        middle can't get paired."""
         self._prune()
         key = _hash("claim:" + claim)
         entry = self.pairings.get(key)
-        if entry and not entry["token"]:
+        if entry and not entry["token"] and entry.get("bind") == bind:
             return entry
         pending = [k for k, v in self.pairings.items() if not v["token"]]
         if len(pending) >= MAX_PENDING_CODES:
@@ -130,22 +148,24 @@ class DeviceStore:
             if not idle:
                 return None
             del self.pairings[idle[0][1]]  # the oldest code nobody is looking at
-        taken = {v["code"] for v in self.pairings.values()}
-        code = f"{secrets.randbelow(1_000_000):06d}"
-        while code in taken:
-            code = f"{secrets.randbelow(1_000_000):06d}"
+        taken = {v["code"] for k, v in self.pairings.items() if k != key}
+        while True:
+            nonce = secrets.token_hex(8) if bind else None
+            code = bound_code(bind, claim, nonce) if bind else f"{secrets.randbelow(1_000_000):06d}"
+            if code not in taken:
+                break
         entry = {"key": key, "code": code, "created": time.time(), "expires": time.time() + PAIRING_TTL,
-                 "token": None, "paired_at": 0.0, "live": 0}
+                 "token": None, "paired_at": 0.0, "live": 0, "bind": bind, "nonce": nonce}
         self.pairings[key] = entry
         return entry
 
-    def renew_code(self, claim: str) -> dict | None:
+    def renew_code(self, claim: str, bind: str | None = None) -> dict | None:
         """Replaces this claim's code with a fresh one (the TV asked, usually after expiry)."""
         key = _hash("claim:" + claim)
         old = self.pairings.get(key)
         if old and not old["token"]:
             del self.pairings[key]
-        entry = self.pairing(claim)
+        entry = self.pairing(claim, bind)
         if entry and old and not old["token"]:
             entry["live"] = old["live"]
         return entry

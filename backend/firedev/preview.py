@@ -374,8 +374,12 @@ class PreviewManager:
         return {"preview": p.status if p.status != "unknown" else None, "preview_visible": bool(p.viewers),
                 "preview_kind": p.kind, "preview_needs_install": p.needs_install}
 
-    def gateway_base(self, client_base: str | None) -> str | None:
+    def gateway_base(self, client_base: str | None, tv_base: str | None = None) -> str | None:
+        """Where this TV opens previews. The Fire TV app says itself (its own 127.0.0.1 relay or SSH forward)."""
         st = self.service.config.settings
+        t = urlparse(tv_base or "")
+        if t.scheme in ("http", "https") and t.hostname and not t.path.strip("/"):
+            return f"{t.scheme}://{t.netloc}"
         if st.preview_url:
             return st.preview_url
         u = urlparse(client_base or "")
@@ -531,6 +535,8 @@ class PreviewManager:
 
     def _apply(self, p: Preview, raw: dict, info: dict) -> None:
         meta = raw["meta"] or {}
+        if meta.get("project_path") and meta["project_path"] != self.service.sessions[p.pid].path:
+            meta = {}  # another FireDev install's project with the same id: not ours to adopt
         p.kind, p.framework, p.label, p.dir = info["kind"], info["framework"], info["label"], info["dir"]
         p.hmr, p.needs_install, p.native, p.alternatives = info["hmr"], info["needs_install"], info["native"], info["alternatives"]
         p.install = info.get("install")
@@ -690,7 +696,7 @@ class PreviewManager:
             "",
         ])
         meta = {"port": port, "framework": p.framework, "label": p.label, "hmr": p.hmr, "dir": p.dir, "command": full,
-                "started": time.time(), "source": source}
+                "started": time.time(), "source": source, "project_path": s.path}
         try:
             await s.remote.write_file(f"{d}/cmd.sh", script, mode="755")
             await s.remote.write_file(f"{d}/meta.json", json.dumps(meta))
@@ -949,9 +955,9 @@ class PreviewManager:
         if rel.startswith("/") or ".." in rel.split("/"):
             return None
         s = self.service.sessions[pid]
-        res = await s.remote.conn.run(f"head -c 8000000 {shlex.quote(posixpath.join(s.path, rel))}", encoding=None, check=False)
+        data = await s.remote.read_bytes(posixpath.join(s.path, rel))
         ext = rel.rsplit(".", 1)[-1].lower()
-        return bytes(res.stdout or b""), {"jpg": "image/jpeg", "jpeg": "image/jpeg", "webp": "image/webp"}.get(ext, "image/png")
+        return data, {"jpg": "image/jpeg", "jpeg": "image/jpeg", "webp": "image/webp"}.get(ext, "image/png")
 
 
 def _safe_path(path: str | None) -> str:

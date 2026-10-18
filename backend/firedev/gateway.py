@@ -54,24 +54,24 @@ class Tunnels:
         self._lock = asyncio.Lock()
 
     async def local_port(self, s: "ProjectSession", port: int) -> tuple[int, httpx.AsyncClient]:
-        conn = s.remote.conn
-        if conn is None or not s.remote.connected:
+        r = s.remote
+        if not r.connected:
             raise ConnectionError("The machine is reconnecting")
         key = (s.project.id, port)
         async with self._lock:
             cur = self._t.get(key)
-            if cur and cur[0] is conn:
+            if cur and cur[0] == r.generation:
                 return cur[2], cur[3]
             if cur:
                 with contextlib.suppress(Exception):
-                    cur[1].close()
+                    if cur[1]:
+                        cur[1].close()
                 with contextlib.suppress(Exception):
                     await cur[3].aclose()
-            listener = await conn.forward_local_port("127.0.0.1", 0, "127.0.0.1", port)
-            lport = listener.get_port()
+            lport, listener = await r.forward(port)
             client = httpx.AsyncClient(base_url=f"http://127.0.0.1:{lport}", timeout=httpx.Timeout(15.0, read=None),
                                        follow_redirects=False, limits=httpx.Limits(max_connections=64, max_keepalive_connections=16))
-            self._t[key] = (conn, listener, lport, client)
+            self._t[key] = (r.generation, listener, lport, client)
             return lport, client
 
     async def probe(self, s: "ProjectSession", port: int, timeout: float) -> int | None:
@@ -83,9 +83,10 @@ class Tunnels:
             return None
 
     async def close(self) -> None:
-        for conn, listener, _, client in self._t.values():
+        for _, listener, _, client in self._t.values():
             with contextlib.suppress(Exception):
-                listener.close()
+                if listener:
+                    listener.close()
             with contextlib.suppress(Exception):
                 await client.aclose()
         self._t.clear()
@@ -149,7 +150,10 @@ class Gateway:
             await self.ws(WebSocket(scope, receive, send))
         elif scope["type"] == "lifespan":
             while True:
-                msg = await receive()
+                try:
+                    msg = await receive()
+                except asyncio.CancelledError:
+                    return
                 if msg["type"] == "lifespan.startup":
                     await send({"type": "lifespan.startup.complete"})
                 elif msg["type"] == "lifespan.shutdown":
@@ -160,7 +164,13 @@ class Gateway:
     # --- HTTP -----------------------------------------------------------------------------------------------
 
     def _secure(self, req: Request) -> bool:
-        return (req.headers.get("x-forwarded-proto") or req.url.scheme) == "https"
+        """HTTPS, or a loopback address: the Fire TV app's own relay (http://127.0.0.1 inside the TV), which browsers
+        treat as a secure context. Either way the cookie can be SameSite=None; Secure, which a frame next to the app's
+        local-file interface needs."""
+        if (req.headers.get("x-forwarded-proto") or req.url.scheme) == "https":
+            return True
+        host = (req.headers.get("host") or "").rsplit(":", 1)[0].strip("[]").lower()
+        return host in ("127.0.0.1", "localhost", "::1")
 
     def _origin(self, req: Request) -> str:
         proto = req.headers.get("x-forwarded-proto") or req.url.scheme
