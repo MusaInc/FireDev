@@ -54,6 +54,23 @@ cfg = {
                                "reason": "Start from a clean slate.", "risk": "Deletes every build output."},
                   }}],
 }
+if os.environ.get("FIREDEV_E2E_SCENARIO") == "preview":
+    # Live preview: a static web project, and the preview gateway on its own port (its own origin).
+    web = DIR / "web"
+    web.mkdir(parents=True)
+    (web / "index.html").write_text(textwrap.dedent("""\
+        <!doctype html><html><head><meta charset="utf-8"><title>Fixture Site</title>
+        <style>body{margin:0;font:20px sans-serif}header{display:flex;gap:30px;padding:20px}main{padding:40px}.tall{height:1600px}</style></head>
+        <body><header><b>Fixture</b><a href="/about.html">About</a><a href="#more">More</a></header>
+        <main><h1 id="h">Version one</h1><button id="b" onclick="this.textContent='Clicked'">Press me</button><div class="tall"></div></main></body></html>"""))
+    (web / "about.html").write_text("<!doctype html><meta charset=utf-8><title>About us</title><h1>About page</h1>")
+    subprocess.run(["git", "init", "-q", str(web)], check=True)
+    cfg["server"]["preview_port"] = int(os.environ.get("FIREDEV_E2E_PREVIEW_PORT", "8136"))
+    cfg["projects"] = [{"id": "web", "name": "Fixture Site", "machine": "local", "path": str(web), "agent": "shell",
+                        "tmux_session": f"firedev-e2e-web-{PORT}"}]
+    subprocess.run(["tmux", "kill-session", "-t", f"=firedev-e2e-web-{PORT}"], capture_output=True)
+else:
+    cfg["server"]["preview_port"] = 0
 DIR.mkdir(parents=True, exist_ok=True)
 import yaml  # noqa: E402
 

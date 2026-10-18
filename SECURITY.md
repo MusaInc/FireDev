@@ -41,6 +41,30 @@ least 2. Anything run outside the sandbox at the agent's request is at least lev
 higher level for an action (the demo's `deploy_preview` is level 2 with its own reason and risk text). The rules
 are in `backend/firedev/risk.py`, with tests in `backend/tests/test_risk.py`.
 
+## Live previews
+
+The preview shows code the agent just wrote, so it never runs inside FireDev's own interface:
+
+- **Its own origin.** Pages are served by the preview gateway on a separate port (e.g. `127.0.0.1:8132` inside the TV, a different origin from the interface), so a
+  page can't read the TV's token or script FireDev's interface. The TV frames it with
+  `sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-downloads"`: no top-level navigation, no popups.
+  It talks to FireDev only through `postMessage`, and FireDev only acts on messages from the frame it opened.
+- **Only paired TVs.** `preview_open` (TV role only) returns a one-time ticket, valid 90 seconds. The gateway trades it
+  for an HttpOnly session cookie bound to that TV and project, and checks the TV still exists on every request:
+  unpairing it ends its previews. Without a session, every path answers 403. FireDev's cookie is removed before
+  requests reach the dev server.
+- **No open proxy.** The gateway reaches exactly one place per session: `127.0.0.1:<port>` on that project's
+  machine, through the project's SSH connection, where the port is one FireDev started or found the project's own
+  processes listening on. There is no parameter that names a host or URL. Dev servers FireDev starts bind
+  127.0.0.1 only, so nothing is exposed on the dev machine's network.
+- **Starting code is approved.** FireDev's own static server runs no project code and starts freely. A framework
+  dev server runs the project's config and scripts outside the agent's sandbox: when the agent asks for it, the TV
+  shows a level 2 approval; when you ask (OK on the TV, or by voice), that is the approval. Installing dependencies
+  always asks first (it downloads and runs install scripts).
+- **Same site.** A port is a different origin but the same *site* as the host name, so the page could send
+  same-site requests to other services on that host with cookies the browser holds for them. The TV's WebView holds
+  none, but if you also open the preview in your desktop browser, prefer a `server.preview_url` on a host name of its own.
+
 ## Credentials and data
 
 - SSH: keys by path (a dedicated `~/.config/firedev/keys/firedev_ed25519` is recommended). Host keys are checked
@@ -61,6 +85,9 @@ request signed by Alexa (certificate, `Signature-256` and a timestamp within 150
 specifies) for the configured skill ID, from an Alexa account that was linked by holding OK on the TV.
 
 ## Known gaps
+
+- A live preview runs the project's dev server with your user's permissions, outside the agent's sandbox (after the
+  approval above). What the page itself does in the TV's browser is contained by the origin and the sandbox.
 
 - A sandboxed agent can still read files your user can read. Run the agent as a user that only has what the
   project needs if that matters to you.

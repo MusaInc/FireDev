@@ -34,7 +34,7 @@ SIZES = {"s", "m", "l", "xl"}
 ICONS = {"check", "cross", "agent", "terminal", "file", "code", "shield", "deploy", "wait", "android", "mic", "undo", "dot"}
 BIND_ROOTS = {"project", "projects", "approvals", "agents", "history", "conversation"}
 BIND_FORMATS = {"count", "percent", "duration", "bytes", "time", "text"}
-NAV_TARGETS = {"home", "workspace", "activity", "changes", "terminal", "back", "surface"}
+NAV_TARGETS = {"home", "workspace", "activity", "changes", "terminal", "back", "surface", "preview"}
 PROVENANCE = {"live", "agent", "mixed", "example"}
 _ID = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,47}$")
 _BIND_PATH = re.compile(r"^[a-z_]+(\.[A-Za-z0-9_-]+|\[\d{1,3}\])*$")
@@ -142,6 +142,13 @@ def _url(v, where, errs):
         errs.append(f"{where} must be an http(s) URL")
 
 
+def _preview_url(v, where, errs):
+    """"live" is this project's own running dev server, shown through FireDev's preview gateway."""
+    if v == "live":
+        return
+    _url(v, where, errs)
+
+
 def _point(v, where, errs):
     if isinstance(v, (int, float)) and not isinstance(v, bool):
         return
@@ -193,7 +200,7 @@ ACTIONS = {
     "expand": {"target": _str(48, bindable=False)},
     "select_tab": {"target": _str(48, bindable=False), "tab": _int(0, 11)},
     "cancel_task": {},
-    "open_preview": {"url": _url},
+    "open_preview": {"url": _preview_url},
 }
 ACTION_REQUIRED = {"ask": ("text",), "navigate": ("to",), "open_project": ("project",), "run_action": ("action",),
                    "open_diff": ("path",), "open_output": ("ref",), "expand": ("target",), "select_tab": ("target", "tab"),
@@ -268,7 +275,7 @@ COMPONENTS: dict[str, dict] = {
     # ref "last" follows the project's latest command live; a run id shows that run's output.
     "terminal": {"props": {"title": _str(120), "ref": _str(80, False), "text": _str(MAX_CODE, False), "lines": _int(4, 40)}},
     "image": {"props": {"src": _url, "alt": _str(200, False), "caption": _str(200)}, "required": ("src",)},
-    "preview": {"props": {"url": _url, "title": _str(120), "caption": _str(200)}, "required": ("url",)},
+    "preview": {"props": {"url": _preview_url, "title": _str(120), "caption": _str(200)}, "required": ("url",)},
     "choice": {"props": {"prompt": _str(200), "options": _list(_obj({"label": _str(60, False), "value": _str(200, False),
                                                                       "detail": _str(200, False)}, ("label",)), 8)},
                "required": ("options",)},
@@ -434,6 +441,8 @@ def _urls(node, where):
 
 
 def origin_allowed(url: str, origins: list[str]) -> bool:
+    if url == "live":  # the gateway decides who sees the live preview, not the screen
+        return True
     u = urlparse(url or "")
     here = f"{u.scheme}://{u.netloc}".lower()
     for o in origins:

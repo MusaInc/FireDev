@@ -40,6 +40,7 @@ reaches your development machines over SSH with your keys.
   `cancel_task`, `continue_task`, `undo_changes`, …) with role checks, plus approvals and voice.
 - `events.py`: event envelope, bus and JSONL history per project.
 - `mcp.py`, `alexa.py`: thin translators onto the same command API.
+- `preview.py`, `gateway.py`, `preview_intents.py`: live previews of the project's own web app (below).
 
 ## Runs: why the agent survives everything
 
@@ -118,6 +119,47 @@ TV quick picks  ─┘
 Voice never becomes a shell command. Alexa intents map to the same canonical sentences the phone sends, so
 every source shares one safety path. Approving by voice only moves the TV's focus to Approve: the press must
 come from the remote.
+
+## Live preview: the real app on the TV
+
+```
+TV (sandboxed frame) ── TV connection to the user machine ── preview gateway :8132 ── SSH direct-tcpip ──▶ 127.0.0.1:<port> on the dev machine
+                                              (same process)          (the project's own SSH connection)
+```
+
+When the agent builds or changes something visible, the TV shows the project's actual running web app, not a
+screenshot. localhost on the TV is not localhost on the dev machine, so the page travels through FireDev.
+
+- `preview.py` detects what a project is with one SSH command: the framework from `package.json` (Vite, Next.js,
+  Nuxt, SvelteKit, Astro, Remix, Expo web, Angular, Create React App, Vue CLI, Gatsby, Parcel, webpack, or a
+  `dev`/`start` script), a static site (`index.html`), or a native app (Android, iOS, Flutter, React Native). It also
+  lists the ports the project's own processes listen on (`ss -ltnp`, each pid's cwd), so a `npm run dev` the user
+  started is adopted rather than duplicated. A project can set `preview: {command, port, path, dir, auto_open}`.
+- FireDev-managed dev servers run in the project's tmux session, window `preview`, bound to 127.0.0.1 on a port
+  chosen per project (stable, and never one already in use), with `~/.firedev/projects/<id>/preview/{cmd.sh,meta.json,out.log}`.
+  They outlive the TV, network drops and FireDev restarts; on reconnect FireDev finds the window and the port again.
+- `gateway.py` is a second listener with its own origin. It forwards HTTP (streamed both ways, so SSE works) and
+  WebSockets (so Vite, Next.js and webpack hot reload work as on localhost) through an SSH port forward that is
+  rebuilt when the connection is. Host and Origin are rewritten to `127.0.0.1:<port>`, redirects to the dev server
+  become relative, `X-Frame-Options`/`frame-ancestors` are dropped, and HTML gets one script tag: `/__firedev/tv.js`.
+- `preview_tv.js` runs in the page. FireDev keeps the remote: while you "use the page", it posts the arrow keys and OK
+  into the frame, and the helper moves a focus ring between links, buttons and fields, clicks, scrolls, and reports
+  the page, its title and console errors back (the agent sees those errors in its next prompt and in
+  `firedev preview status`). Back always returns to FireDev.
+- Reloads: hot-reload servers update themselves. For servers without it (static sites, plain scripts), FireDev
+  reloads the frame when the agent changes a file and when a remote file watcher sees a save, only while a TV watches.
+- Offers: when an agent turn changed web files (from file events, or git for files written from the shell), FireDev
+  offers the preview on the TV, or opens it beside the agent when the request was visibly about the UI. The agent can
+  also run `firedev preview open [/path]` itself.
+- Native apps get an honest "no web preview": FireDev doesn't run them in a WebView. It offers what exists instead:
+  building the app, the screenshot images the project's tests left in the repository, a web target if there is one.
+
+TV side: `screens/preview.js` (split with the agent's work, or full screen; four split sizes; desktop, tablet and
+mobile viewports at their real CSS widths; zoom changes that width) and `preview.js` (one-time addresses, messages
+from the page, offers, voice actions). Voice: `preview_intents.py` ("show me the preview", "full screen", "go back to
+Codex", "show me the mobile version", "zoom in", "go to the pricing page", "start the dev server"...). While the
+preview is on screen, "make the header smaller" goes to the coding agent as a change to the site. Generated screens can
+include the running app as `{"type": "preview", "url": "live"}` next to charts or diagrams.
 
 ## TV interface
 

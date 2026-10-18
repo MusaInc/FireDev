@@ -17,6 +17,7 @@ from . import genui, intents, risk, sysagents
 from .auth import Client, DeviceStore
 from .config import Config
 from .events import Bus
+from .preview import PreviewManager
 from .session import ProjectSession, Task, _rid
 
 log = logging.getLogger("firedev.service")
@@ -54,10 +55,11 @@ COMMANDS = {
     "get_current_task", "get_build_status", "approve_action", "reject_action", "cancel_task", "continue_task",
     "undo_changes", "get_changes", "get_file_diff", "get_output", "voice_command", "voice_link", "get_history", "reset_state",
     "ui_action", "ui_get", "ui_back", "get_data", "ui_show", "ui_patch",
+    "preview_status", "preview_open", "preview_start", "preview_stop", "preview_view", "preview_report",
 }
 READ_ONLY = {"list_projects", "get_project_status", "get_current_task", "get_build_status", "get_changes", "get_file_diff",
-             "get_output", "get_history", "ui_get", "get_data"}
-DATA_SOURCES = {"status", "projects", "agents", "history", "approvals", "conversation"}
+             "get_output", "get_history", "ui_get", "get_data", "preview_status"}
+DATA_SOURCES = {"status", "projects", "agents", "history", "approvals", "conversation", "preview"}
 AGENTS_POLL = 4.0
 
 
@@ -67,6 +69,7 @@ class FireDev:
         self.devices = devices
         self.bus = bus or Bus(config.settings.data_dir / "history")
         self.sessions = {pid: ProjectSession(self, p) for pid, p in config.projects.items()}
+        self.previews = PreviewManager(self)
         self.approvals: dict[str, Approval] = {}
         self._dirty: set[str] = set()
         self._flush: asyncio.TimerHandle | None = None
@@ -243,6 +246,10 @@ class FireDev:
             return {"approvals": self.pending_approvals()}
         if source == "conversation":
             return {"conversation": list(session.conversation)}
+        if source == "preview":
+            p = await self.previews.refresh(session.project.id)
+            return {**p.to_dict(), "note": "The project's live preview as FireDev sees it (status, framework, port on the dev machine, "
+                                           "errors the TV saw in the page)"}
         snap = session.snapshot()
         return {k: snap.get(k) for k in ("id", "name", "machine", "path", "connection", "agent", "task", "last_task", "queue",
                                          "build", "tests", "deploy", "changes", "approvals", "surface")}
@@ -471,6 +478,98 @@ class FireDev:
         base = (self.config.settings.public_url or args.get("base") or "").rstrip("/")
         return {"ok": True, "url": f"{base}/voice#t={token}", "device": dev["id"], "expires_in_hours": 12}
 
+    # --- live preview -----------------------------------------------------------------------------------------
+
+    def _preview_session(self, args: dict) -> ProjectSession:
+        s = self.session(args.get("project"))
+        if s.project.id not in self.previews.previews:
+            raise CommandError("No preview for that project")
+        return s
+
+    async def _cmd_preview_status(self, args, client):
+        s = self._preview_session(args)
+        if s.conn_state == "connected" and (args.get("refresh") or not self.previews.previews[s.project.id].detected):
+            await self.previews.refresh(s.project.id)
+        return {"ok": True, "preview": self.previews.previews[s.project.id].to_dict()}
+
+    async def _cmd_preview_open(self, args, client):
+        """A one-time address of the running preview for this TV. With start, the user asked: start it if it isn't running."""
+        if client.role not in ("tv", "admin"):
+            raise CommandError("Only a paired TV can show previews")
+        s = self._preview_session(args)
+        await self._ensure_open(s)
+        pid = s.project.id
+        if args.get("start"):
+            p = await self.previews.ensure_running(pid, "tv", install=bool(args.get("install")), dir=args.get("dir"), wait=False)
+        else:
+            p = await self.previews.refresh(pid, quiet=True) if not self.previews.previews[pid].detected else self.previews.previews[pid]
+        shots = bool(args.get("screenshots")) and bool(p.screenshots)
+        if p.status != "running" and not shots:
+            return {"ok": True, "preview": p.to_dict(), "url": None}
+        base = self.previews.gateway_base(args.get("base"))
+        if not base:
+            return {"ok": False, "preview": p.to_dict(), "url": None,
+                    "message": "The preview gateway has no public address. Set server.preview_url in firedev.yaml."}
+        tok = self.previews.issue_ticket(client, pid, "/__firedev/shots" if shots else args.get("path"))
+        return {"ok": True, "preview": p.to_dict(), "url": f"{base}/__firedev/enter?t={tok}", "origin": base}
+
+    async def _cmd_preview_start(self, args, client):
+        if client.role not in ("tv", "admin", "voice", "assistant"):
+            raise CommandError("Not allowed")
+        s = self._preview_session(args)
+        await self._ensure_open(s)
+        p = await self.previews.ensure_running(s.project.id, "tv" if client.role in ("tv", "admin") else client.role,
+                                               install=bool(args.get("install")), dir=args.get("dir"), wait=False)
+        return {"ok": True, "preview": p.to_dict()}
+
+    async def _cmd_preview_stop(self, args, client):
+        if client.role not in ("tv", "admin"):
+            raise CommandError("Only the TV can stop the preview server")
+        s = self._preview_session(args)
+        p = await self.previews.stop_server(s.project.id)
+        return {"ok": True, "preview": p.to_dict()}
+
+    async def _cmd_preview_view(self, args, client):
+        if client.role not in ("tv", "admin"):
+            raise CommandError("Only the TV reports what it shows")
+        s = self._preview_session(args)
+        p = self.previews.set_viewer(client, s.project.id, bool(args.get("visible")), args.get("layout"), args.get("viewport"))
+        return {"ok": True, "preview": p.to_dict()}
+
+    async def _cmd_preview_report(self, args, client):
+        if client.role not in ("tv", "admin"):
+            raise CommandError("Only the TV reports what it shows")
+        s = self._preview_session(args)
+        self.previews.report(s.project.id, {k: args.get(k) for k in ("page", "title", "error") if k in args})
+        return {"ok": True}
+
+    async def _preview_intent(self, a: dict, client: Client, pid: str | None) -> dict:
+        s = self.session(pid)
+        op = a["op"]
+        ui = {"type": "preview", "op": op, **{k: v for k, v in a.items() if k != "op"}}
+        quiet = {"ok": True, "message": "", "speak": False, "client_action": ui}
+        if op in ("viewport", "zoom", "size", "nav", "close"):
+            if op == "close":
+                return {**quiet, "navigate": "workspace"}
+            return quiet
+        await self._ensure_open(s)
+        if op == "status":
+            p = await self.previews.refresh(s.project.id)
+            return {"ok": True, "message": self.previews.spoken(p)}
+        if op == "stop":
+            p = await self.previews.stop_server(s.project.id)
+            return {"ok": True, "message": p.message, "client_action": {"type": "preview", "op": "state"}}
+        if op == "restart":
+            p = self.previews.previews[s.project.id]
+            if p.managed:
+                await self.previews.stop_server(s.project.id)
+            op = "start"
+        p = await self.previews.refresh(s.project.id, quiet=True)
+        if op in ("start", "install") or (op == "show" and p.status in ("idle", "failed") and not p.needs_install):
+            p = await self.previews.ensure_running(s.project.id, "voice", install=op == "install", wait=False)
+        ui["op"] = "show"
+        return {"ok": True, "message": self.previews.spoken(p, showing=True), "client_action": ui}
+
     # --- voice ----------------------------------------------------------------------------------------------
 
     async def _cmd_voice_command(self, args, client):
@@ -484,7 +583,8 @@ class FireDev:
         return {"project": pid, "agent": s.adapter.display, "busy": s.busy, "has_surface": bool(s.surface),
                 "actions": {a.id: {"kind": a.kind, "title": a.title} for a in s.project.actions.values()},
                 "last_build_failed": s.build.get("state") == "failed", "last_tests_failed": s.tests.get("state") == "failed",
-                "pending_approval": any(a.project == pid for a in self.approvals.values())}
+                "pending_approval": any(a.project == pid for a in self.approvals.values()),
+                **self.previews.context(pid)}
 
     async def voice(self, text: str, client: Client, source: str = "voice", project: str | None = None, ui: dict | None = None) -> dict:
         pid = project or self.focus_project
@@ -550,6 +650,8 @@ class FireDev:
             return {"ok": True, "task": task.id, "message": "Changing the screen.", "navigate": "surface", "speak": False}
         if n == "navigate":
             return {"ok": True, "message": "", "navigate": a["to"], "speak": False}
+        if n == "preview":
+            return await self._preview_intent(a, client, pid)
         if n in ("speech_stop", "conversation_end"):
             return {"ok": True, "message": "Okay." if n == "conversation_end" else "", "speech": "stop",
                     "listen": "off" if n == "conversation_end" else None, "speak": n == "conversation_end"}

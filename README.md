@@ -31,6 +31,8 @@ how you give instructions.
 | Risk levels 0–3, approvals on the TV, held confirmation for level 3 | **Working**, tested with remote keys |
 | Agent requests outside its sandbox (`firedev run`, `firedev request`) gated by the TV | **Working**, tested |
 | Diff review, raw terminal output, undo of the agent's last change | **Working**, tested |
+| Live preview: the project's real running web app on the TV beside the agent or full screen; desktop, tablet and mobile widths, zoom, remote navigation inside the page, voice control; dev servers detected (Vite, Next.js, Expo web, static…) or started in tmux; preview gateway over SSH with hot reload, own origin, one-time tickets | **Working** in the browser and over real SSH: 41 unit/SSH tests (incl. an SSH drop and a FireDev restart), 7 browser tests driven by remote keys and voice. **Not yet on a physical TV** |
+| Native apps in the preview | Reported honestly (no web preview); offers the build, screenshot images in the repository, or a web target |
 | Fire TV app (Kotlin WebView shell + TV interface), D-pad only | **Working** in the browser at 1080p (14 browser tests, incl. a 960×540 TV-viewport fit check) and when loaded the way the APK loads it (`tools/shell-sim.mjs`); APK builds. **Not yet run on a physical Fire TV** (pending) |
 | Phone microphone (`/voice`): live transcript on the TV, typed fallback | **Working** (tested in a phone-sized browser and with streamed partial transcripts). Browser speech recognition needs HTTPS; not yet tried on a real phone |
 | Pairing a TV with a 6-digit code | **Working**, tested |
@@ -145,6 +147,11 @@ handle_path /firedev/* {
 ```
 
 
+Live previews go through the preview gateway, a second listener inside `firedev serve` (port 8132) with its own
+origin, so pages can't reach FireDev's interface. It is not meant to be public: FireDev is moving to a local-first
+design where the TV reaches the user's own machine directly (LAN, or SSH from the TV) and both ports travel over that
+connection. See [docs/LOCAL_FIRST.md](docs/LOCAL_FIRST.md).
+
 Everything is safe to expose: `/alexa` only answers requests Alexa signed for your skill (`server.alexa_skill_id`)
 from an account linked on the TV, the API, `/mcp` and `/ws` need a paired token, a new TV only gets a pairing
 code (at most 16 wait at once, a code is never reused while live, and it is only ever shown to the TV holding its random pairing claim), and only `firedev pair` on the service
@@ -167,6 +174,12 @@ Things you can say: *open my Android project · why is the build failing · fix 
 tests · build the app · show me what changed · check the logs · deploy the preview · what are you doing · stop ·
 continue · undo that change*. Anything else becomes a task for the coding agent.
 
+Live preview: *show me the preview · show it full screen · split screen · go back to Codex · show me the mobile version ·
+desktop view · zoom in · make the preview bigger · reload · go to the pricing page · click sign up · scroll down · go back ·
+start (stop, restart) the dev server · install the dependencies*. While the preview is on screen, *"make the header
+smaller"* is a change for the agent, and the page updates as it saves. On the remote: OK on the page to use it (arrows move
+between its links and buttons, OK clicks), Back to return to FireDev, ⏪ ⏩ for the page's history.
+
 ## Demo project
 
 `./firedev demo setup` creates `~/firedev-demo/pulse`: a small Android app with two compile errors and
@@ -178,6 +191,7 @@ continue · undo that change*. Anything else becomes a task for the coding agent
 cd backend && ../.venv/bin/python -m pytest -q                       # 120 unit tests
 FIREDEV_TEST_SSH=1 ../.venv/bin/python -m pytest -q                  # + 12 over real SSH/tmux to localhost
 npm run test:e2e                                                     # 13 TV, phone and signed-Alexa tests driven by remote keys
+npx playwright test --config e2e/preview.config.mjs                  # 7 live-preview tests (gateway, remote keys, voice)
 cd tv/android && ./gradlew testDebugUnitTest assembleDebug           # shell tests + APK
 .venv/bin/python tools/demo_flow.py                                  # the whole demo against real Codex
 ```
@@ -189,7 +203,8 @@ The SSH and browser tests use a scripted stand-in for Codex that emits the same 
 ## Repository
 
 ```
-backend/firedev/      service: config, ssh, session (tmux runs), agents/, risk, intents, service, app, mcp, alexa, cli
+backend/firedev/      service: config, ssh, session (tmux runs), agents/, risk, intents, service, app, mcp, alexa, cli,
+                      preview (dev servers) + gateway (preview origin) + preview_tv.js (remote inside the page)
 remote/bin/           helpers installed on the dev machine: firedev (agent requests), firedev-follow, firedev-watch
 tv/web/               TV interface (ES modules → dist/app.js), fonts
 tv/android/           Fire TV shell (Kotlin WebView)

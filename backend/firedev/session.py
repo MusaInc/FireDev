@@ -954,6 +954,14 @@ class ProjectSession:
         if self.build.get("state") not in (None, "unknown"):
             lines.append(f"Build: {self.build.get('state')}.")
         lines += self._ui_context_lines(task)
+        pv = self.service.previews.previews.get(self.project.id)
+        if pv and pv.status == "running":
+            lines.append(f"The project's web app is running as FireDev's live preview ({pv.label}"
+                         + (f", the TV shows it now, page {pv.page}" if pv.viewers else "") + "). To show the real app, use "
+                         "{\"type\": \"preview\", \"url\": \"live\"} (with charts or notes beside it if useful), or navigate {to: \"preview\"} "
+                         "for the app alone.")
+        elif pv and pv.status == "native":
+            lines.append(f"This is a native app ({(pv.native or {}).get('platform')}): there is no live web preview of it.")
         if self.surface:
             lines.append("Current screen outline (component ids for patches):\n" + genui.outline(self.surface))
             if task.mode == "ui_edit":
@@ -966,6 +974,9 @@ class ProjectSession:
 
     def _context_for_agent(self, task: Task | None = None) -> str | None:
         lines = []
+        watching = self.service.previews.agent_context(self.project.id, (task.prompt or task.text) if task else "")
+        if watching:
+            lines.append(watching)
         if task and (task.ui or task.mode in ("present", "answer")):
             lines += self._ui_context_lines(task)
         if self.build.get("state") == "failed" and self.build.get("errors"):
@@ -1089,6 +1100,9 @@ class ProjectSession:
         if req.get("type") in ("ui", "say", "data"):
             await self._answer_request(rid, req)
             return
+        if req.get("type") == "preview":
+            await self._answer_preview(rid, req)
+            return
         task = self.current
         action: Action | None = None
         if req.get("type") == "action":
@@ -1129,6 +1143,18 @@ class ProjectSession:
         await self._set_request_state(rid, f"running {run.dir}")
         if task:
             self.set_status(title + "…")
+
+    async def _answer_preview(self, rid: str, req: dict) -> None:
+        """`firedev preview ...`: FireDev starts or shows the project's dev server (outside the sandbox, so starting
+        project code asks the TV first) and tells the agent what the TV sees."""
+        try:
+            state, out = await self.service.previews.agent_request(self, req)
+        except Exception as e:  # noqa: BLE001 - the agent must always get an answer
+            log.exception("answering a preview request failed")
+            state, out = "error", str(e)
+        if out:
+            await self.remote.write_file(f"{self.queue_dir}/{rid}.out", out + "\n")
+        await self._set_request_state(rid, state if state != "error" else f"error {out.splitlines()[0] if out else 'failed'}")
 
     async def _answer_request(self, rid: str, req: dict) -> None:
         """ui, say and data requests from an agent: FireDev answers them itself, nothing runs."""

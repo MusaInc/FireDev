@@ -157,6 +157,10 @@ def humanize_command(command: str) -> str:
             return {"test": "Running the tests", "tests": "Running the tests", "build": "Building the app"}.get(rest[1], f"Running {rest[1].replace('_', ' ')}")
         if sub == "request":
             return "Asking for approval"
+        if sub == "preview":
+            what = rest[1] if len(rest) > 1 else "status"
+            return {"open": "Showing the live preview on the TV", "show": "Showing the live preview on the TV",
+                    "start": "Starting the live preview", "stop": "Stopping the live preview"}.get(what, "Checking the live preview")
         return "Checking FireDev actions"
     if tool in {"cat", "sed", "head", "tail", "less", "nl", "bat"}:
         p = _first_path(rest)

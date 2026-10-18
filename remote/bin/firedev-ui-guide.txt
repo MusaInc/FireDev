@@ -4,7 +4,7 @@ Show something on the user's TV:      firedev ui show <<'JSON' ... JSON      (or
 Change part of what is shown:         firedev ui patch <<'JSON' [ops...] JSON
 Read what the TV shows now:           firedev ui current        (outline with component ids; --json for the full spec)
 Speak a short progress line:          firedev say "Found it: the pairing code expires too early."
-Real FireDev data as JSON:            firedev data status|projects|agents|history|approvals|conversation
+Real FireDev data as JSON:            firedev data status|projects|agents|history|approvals|conversation|preview
 
 The TV is 1920x1080, read from a sofa with a remote (arrows, OK, Back). Prefer a few large components over many
 small ones: about 3-8 per screen. FireDev checks every screen; if it is refused, the error says what to fix.
@@ -46,7 +46,8 @@ deploy wait android mic undo dot.
   diff      title, path (live working-tree diff of that file) or text (a unified diff)
   terminal  title, ref ("last" = the latest command, live) or text, lines
   image     src (https URL on an allowed preview address), alt, caption
-  preview   url (allowed preview address of this project), title, caption
+  preview   url: "live" = the project's running web app (FireDev's live preview; check `firedev data preview`), or an
+            allowed preview address of this project; title, caption. To show only the app, use navigate {to:"preview"}.
   choice    prompt, options [{label, value, detail}]  - the user's pick is sent back to you as their answer
   form      title, prompt, submit, fields [{key,label,kind choice|toggle|number, options, value, min, max, step}]
  live (FireDev keeps these current by itself)
@@ -64,7 +65,7 @@ LIVE DATA BINDING: any value can be {"$bind": "<path>"} instead of a literal; th
 
 ACTIONS (on card, button, metric, list items): {"type": ...}
  ask {text}               send text to you as the user's next request
- navigate {to}            home|workspace|activity|changes|terminal|back|surface
+ navigate {to}            home|workspace|activity|changes|terminal|back|surface|preview
  open_project {project}   run_action {action} (a declared project action; risky ones still need approval)
  open_diff {path}         open_output {ref}        open_approval {approval}   expand {target}
  select_tab {target,tab}  cancel_task (the TV confirms first)      open_preview {url}

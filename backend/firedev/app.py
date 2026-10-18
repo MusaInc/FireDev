@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import json
 import logging
@@ -20,6 +21,7 @@ from .alexa import AlexaSkill
 from .alexa_verify import AlexaVerifier, VerificationError
 from .auth import PAIRING_TTL, Client, DeviceStore
 from .config import Config
+from .gateway import Gateway, serve_gateway
 from .service import CommandError, FireDev
 
 log = logging.getLogger("firedev.app")
@@ -33,7 +35,22 @@ def create_app(config: Config, devices: DeviceStore) -> FastAPI:
     service = FireDev(config, devices)
     skill = AlexaSkill(service, devices)
     verifier = AlexaVerifier(config.settings.alexa_skill_id)
-    app = FastAPI(title="FireDev", docs_url=None, redoc_url=None)
+    gateway = Gateway(service.previews)
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_app):
+        service.previews.start()
+        # The live-preview gateway is a second listener: its own origin, so previews can't reach FireDev's interface.
+        server = await serve_gateway(gateway, config.settings.host, config.settings.preview_port) if config.settings.preview_port else None
+        try:
+            yield
+        finally:
+            await service.previews.stop()
+            if server:
+                server.should_exit = True
+
+    app = FastAPI(title="FireDev", docs_url=None, redoc_url=None, lifespan=lifespan)
+    app.state.gateway = gateway
     app.state.service = service
     pair_listeners: dict[str, set[asyncio.Event]] = {}  # pairing key -> TV connections showing that code
 
@@ -252,6 +269,7 @@ def create_app(config: Config, devices: DeviceStore) -> FastAPI:
             "type": "hello", "client": {"id": client.id, "name": client.name, "role": client.role},
             "home": service.home(), "projects": {pid: s.snapshot() for pid, s in service.sessions.items()},
             "approvals": service.pending_approvals(), "focus": service.focus_project, "ui": service.ui_snapshot(),
+            "previews": service.previews.snapshot(),
         })
 
         async def pump():

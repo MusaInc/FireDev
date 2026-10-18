@@ -3,6 +3,7 @@ import { defineConfig } from '@playwright/test';
 const port = process.env.FIREDEV_E2E_PORT || '8139';
 export default defineConfig({
   testDir: '.',
+  testIgnore: 'preview.spec.mjs', // has its own service: preview.config.mjs
   timeout: 90000,
   workers: 1,
   retries: 0,

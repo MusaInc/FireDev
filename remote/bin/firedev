@@ -7,7 +7,8 @@
 #   firedev ui show|patch [file]                      put a screen on the TV, or change it (JSON on stdin or in file)
 #   firedev ui current [--json] | firedev ui help     what the TV shows now | the screen format
 #   firedev say "<sentence>"                          speak a short progress update on the TV
-#   firedev data status|projects|agents|history|approvals|conversation   real FireDev data as JSON
+#   firedev data status|projects|agents|history|approvals|conversation|preview   real FireDev data as JSON
+#   firedev preview [status|start|open [/path]|stop]  the project's live web preview on the TV (FireDev runs the dev server)
 #
 # The helper never runs anything itself. It drops a request into the project's FireDev queue; the FireDev
 # service picks it up, checks the risk level itself, asks for approval on the TV when needed, runs the
@@ -26,7 +27,7 @@ json_escape() {
   printf '%s' "$s"
 }
 
-usage() { sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 [ $# -ge 1 ] || usage
 cmd=$1; shift
@@ -69,6 +70,13 @@ case "$cmd" in
   data)
     [ $# -ge 1 ] || die "usage: firedev data status|projects|agents|history|approvals|conversation"
     type=data; action=$1; command=""; reason="" ;;
+  preview)
+    sub=${1:-status}; shift || true
+    case "$sub" in
+      status|start|open|show|stop) ;;
+      *) die "usage: firedev preview [status|start|open [/path]|stop]" ;;
+    esac
+    type=preview; action=$sub; command="${1:-}"; reason="" ;;
   -h|--help|help) usage ;;
   *) die "unknown command '$cmd' (try: firedev actions)" ;;
 esac
@@ -90,9 +98,11 @@ mv "$tmp" "$QUEUE/$id.req"
 
 state_file="$QUEUE/$id.state"
 
-# ui, say and data are answered by FireDev itself: print its answer and exit.
-if [ "$type" = ui ] || [ "$type" = say ] || [ "$type" = data ]; then
-  deadline=$(( $(date +%s) + 60 ))
+# ui, say, data and preview are answered by FireDev itself: print its answer and exit. Starting a preview can wait for
+# the user's approval on the TV and for the dev server to come up.
+if [ "$type" = ui ] || [ "$type" = say ] || [ "$type" = data ] || [ "$type" = preview ]; then
+  wait_for=60; [ "$type" = preview ] && wait_for=$WAIT_SECONDS
+  deadline=$(( $(date +%s) + wait_for ))
   while :; do
     if [ -f "$state_file" ]; then
       read -r state rest < "$state_file" || true

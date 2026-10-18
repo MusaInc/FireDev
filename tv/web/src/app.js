@@ -15,10 +15,12 @@ import { ActivityScreen } from './screens/activity.js';
 import { DiffScreen } from './screens/diff.js';
 import { CenterScreen } from './screens/center.js';
 import { SurfaceScreen } from './screens/surface.js';
+import { PreviewScreen } from './screens/preview.js';
+import { createPreview } from './preview.js';
 import { Overlays } from './overlays.js';
 import { createVoice } from './voice.js';
 
-const SCREENS = { home: HomeScreen, workspace: WorkspaceScreen, activity: ActivityScreen, diff: DiffScreen, center: CenterScreen, surface: SurfaceScreen };
+const SCREENS = { home: HomeScreen, workspace: WorkspaceScreen, activity: ActivityScreen, diff: DiffScreen, center: CenterScreen, surface: SurfaceScreen, preview: PreviewScreen };
 
 export function createApp() {
   const stage = document.getElementById('stage');
@@ -70,6 +72,7 @@ export function createApp() {
   app.focus = createFocus();
   app.overlays = new Overlays(app);
   app.voice = createVoice(app);
+  app.preview = createPreview(app);
 
   // --- rendering -----------------------------------------------------------------------------------------
   let frame = 0;
@@ -147,6 +150,7 @@ export function createApp() {
     if (!pid) return null;
     if (to === 'surface') return app.route.name === 'surface' && app.route.project === pid ? null : app.navigate('surface', { project: pid });
     if (to === 'activity') return app.navigate('activity', { project: pid });
+    if (to === 'preview') return app.preview.open(pid);
     if (to === 'changes') return app.navigate('diff', { project: pid });
     if (to === 'back') return app.focus.back();
     if (to === 'workspace' || to === 'terminal') {
@@ -197,6 +201,11 @@ export function createApp() {
         });
         app.ui.data = Object.assign(app.ui.data, msg.ui.data || {});
       }
+      if (msg.previews) {
+        Object.keys(msg.previews).forEach((pid) => app.preview.onState(pid, msg.previews[pid]));
+        // After a reconnect (or a FireDev restart) the service no longer knows this TV is watching.
+        if (app.screen && app.screen.isPreview) app.screen.report(true);
+      }
       const first = !app.everOnline;
       app.everOnline = true;
       if (first || app.route.name === 'center') {
@@ -231,6 +240,12 @@ export function createApp() {
       case 'ui_patch':
         app.ui.surfaces[ev.project] = { surface: d.surface, version: d.version, patch: { base: d.base, changed: d.changed || [] } };
         break;
+      case 'preview_state':
+      case 'preview_reload':
+      case 'preview_control':
+      case 'preview_offer':
+        app.preview.onEvent(ev);
+        break;
       case 'ui_data':
         if (d.source === 'agents') { app.ui.data.agents = d.data || []; app.ui.data.agents_updated = d.updated || Date.now() / 1000; }
         if (d.source === 'history' && ev.project) app.ui.data.history[ev.project] = d.data;
@@ -256,7 +271,8 @@ export function createApp() {
         if (d.speech === 'stop') app.voice.stop();
         if (d.listen === 'off') app.voice.end();
         if (d.navigate && ['surface', 'terminal', 'workspace'].indexOf(d.navigate) >= 0) app.go(d.navigate, ev.project);
-        if (d.client_action && app.route.name === 'surface' && app.screen.clientAction) app.screen.clientAction(d.client_action);
+        if (d.client_action && d.client_action.type === 'preview') app.preview.clientAction(d.client_action, ev.project);
+        else if (d.client_action && app.route.name === 'surface' && app.screen.clientAction) app.screen.clientAction(d.client_action);
         app.overlays.voiceEvent(ev);
         break;
       case 'voice_listening':

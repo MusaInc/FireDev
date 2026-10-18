@@ -498,7 +498,21 @@ export class SurfaceRenderer {
   c_preview(node, p, ctx) {
     const w = ctx.width - PAD;
     const scale = w / 1280;
-    const frame = h('iframe', { src: p.url, tabindex: '-1', style: 'width:1280px;height:720px;transform:scale(' + scale + ')', sandbox: 'allow-scripts allow-same-origin' });
+    const live = p.url === 'live';
+    const frame = h('iframe', { src: live ? 'about:blank' : p.url, tabindex: '-1', style: 'width:1280px;height:720px;transform:scale(' + scale + ')',
+      sandbox: 'allow-scripts allow-same-origin' + (live ? ' allow-forms' : ''), referrerpolicy: live ? 'no-referrer' : null });
+    if (live) {
+      // The project's own dev server, through FireDev's preview gateway (a one-time address for this TV).
+      this.app.link.command('preview_open', { project: this.pid, base: this.app.config.server }).then((r) => {
+        const url = r.ok && r.result && r.result.url;
+        if (url) frame.src = url;
+        else frame.replaceWith(h('div.g-sub', { style: 'padding:40px' }, 'The live preview isn’t running. Say “show the preview” to start it.'));
+      });
+      const el = h('div.g-preview', null, h('div.g-chart-head', null, h('div.g-block-title.clip', null, txt(p.title || 'Live preview')), h('span.g-badge.tone-good', null, 'Live')),
+        h('div.g-preview-box', { style: 'height:' + Math.round(720 * scale) + 'px' }, frame),
+        h('div.g-sub.clip', null, txt(p.caption || 'The running app · OK to open it')));
+      return focusable(el, fid(node.id), { select: () => this.app.preview.open(this.pid) });
+    }
     const el = h('div.g-preview', null, h('div.g-chart-head', null, h('div.g-block-title.clip', null, txt(p.title || 'Live preview')), h('span.g-badge.tone-good', null, 'Live')),
       h('div.g-preview-box', { style: 'height:' + Math.round(720 * scale) + 'px' }, frame),
       h('div.g-sub.clip', null, txt(p.caption || p.url.replace(/^https?:\/\//, ''))));

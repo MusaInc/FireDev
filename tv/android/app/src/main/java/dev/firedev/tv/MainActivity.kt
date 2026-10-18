@@ -17,6 +17,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
 import android.webkit.ConsoleMessage
+import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -71,9 +72,10 @@ class MainActivity : Activity() {
                     queued.forEach { view.evaluateJavascript(it, null) }
                     queued.clear()
                 }
-                // The interface never navigates away from its own files.
+                // The interface never navigates away from its own files. Only the live-preview frame inside it loads
+                // pages from elsewhere (the preview gateway), and it is sandboxed against navigating the interface.
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest) =
-                    !request.url.toString().startsWith("file:///android_asset/")
+                    request.isForMainFrame && !request.url.toString().startsWith("file:///android_asset/")
             }
             webChromeClient = object : WebChromeClient() {
                 override fun onConsoleMessage(m: ConsoleMessage): Boolean {
@@ -81,6 +83,12 @@ class MainActivity : Activity() {
                     return true
                 }
             }
+        }
+        // The live preview's frame (on the preview gateway) keeps its session in a cookie; next to a local-file
+        // interface that cookie counts as third-party, which WebView blocks unless asked.
+        CookieManager.getInstance().apply {
+            setAcceptCookie(true)
+            setAcceptThirdPartyCookies(webView, true)
         }
         setContentView(webView)
         webView.requestFocus()

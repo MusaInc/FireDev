@@ -6,6 +6,9 @@ server:
   port: 8130
   # public_url: https://firedev.example.com   # used for the phone-microphone link and QR code
   # remote_approval: tv    # "tv" (default): only the TV remote can approve. "level2": assistants may approve level 2.
+  # Live previews of the project's web app go through the preview gateway, a second listener with its own origin.
+  # preview_port: 8132     # 0 turns previews off
+  # preview_url: http://127.0.0.1:8132   # where the TV reaches it; unset, TVs use <server host>:preview_port
 
 machines:
   dev-server:
@@ -34,6 +37,12 @@ projects:
       # binary: /usr/local/bin/codex   # if `codex` on the login-shell PATH isn't the one you want
       # model: gpt-5-codex
       # reasoning_effort: medium        # faster turns for demos
+    # Live preview: FireDev detects Vite, Next.js, Expo web, static sites and more on its own. Override if needed:
+    # preview:
+    #   command: npm run dev -- --host 127.0.0.1 --port {port}   # {port} is chosen by FireDev
+    #   path: /                 # first page to show
+    #   dir: web                # where the web app lives in the repository
+    #   auto_open: auto         # auto (open when the request was about the UI) | open | offer | never
     actions:
       test:
         title: Run the tests

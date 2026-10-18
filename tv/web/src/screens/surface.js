@@ -183,7 +183,7 @@ export class SurfaceScreen {
       case 'open_diff': return app.navigate('diff', { project: this.pid, path: a.path });
       case 'open_output': return app.overlays.openOutput(this.pid, a.ref, 'Output');
       case 'open_approval': return app.overlays.focusApprove();
-      case 'open_preview': return app.overlays.openPreview(a.url);
+      case 'open_preview': return a.url === 'live' ? app.preview.open(this.pid) : app.overlays.openPreview(a.url);
       case 'expand': {
         const e = this.renderer.entries[a.target];
         if (e) this.renderer.toggle(a.target, true);

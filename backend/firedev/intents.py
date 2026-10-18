@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 INTENTS = {
     "open_project", "go_home", "send_agent_task", "run_action", "show_changes", "show_activity", "get_status",
     "approve_action", "reject_action", "cancel_task", "continue_task", "undo_changes", "help",
-    "ui_edit", "ui_back", "navigate", "speech_stop", "conversation_end",
+    "ui_edit", "ui_back", "navigate", "speech_stop", "conversation_end", "preview",
 }
 
 
@@ -137,6 +137,11 @@ def parse(text: str, projects: list[dict], context: dict | None = None) -> Inten
         return Intent("help", "What you can say")
     if _HOME.match(t):
         return Intent("go_home", "Show projects")
+    if ctx.get("project"):
+        from . import preview_intents
+        pv = preview_intents.parse(t, text, ctx)
+        if pv:
+            return pv
     if _TERMINAL.match(t):
         return Intent("navigate", "Back to the workspace", {"to": "terminal" if "terminal" in t or "console" in t else "workspace"})
     surface = ctx.get("has_surface")

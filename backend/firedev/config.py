@@ -74,6 +74,8 @@ class Project:
     agent_options: dict = field(default_factory=dict)
     # Web addresses this project's screens may show in a preview component (its preview server, for example).
     previews: list[str] = field(default_factory=list)
+    # Live preview of the project's own dev server: command ("{port}" is filled in), port, path, dir, hmr, auto_open.
+    preview: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.tmux_session:
@@ -90,6 +92,10 @@ class Settings:
     remote_approval: str = "tv"
     # The Alexa skill allowed to call /alexa (from the Alexa developer console). Unset: signed Alexa requests are refused.
     alexa_skill_id: str | None = None
+    # The live-preview gateway: a separate origin that proxies dev servers to paired TVs. preview_url is its public
+    # address (where the TV reaches it, e.g. a port the TV app forwards); unset, TVs use the server's host with preview_port.
+    preview_port: int = 8132
+    preview_url: str | None = None
 
 
 @dataclass
@@ -116,6 +122,8 @@ def parse(raw: dict, path: Path | None = None) -> Config:
         public_url=s.get("public_url"),
         remote_approval=str(s.get("remote_approval", "tv")),
         alexa_skill_id=(str(s["alexa_skill_id"]).strip() or None) if s.get("alexa_skill_id") else None,
+        preview_port=int(s.get("preview_port", 8132)),
+        preview_url=(str(s["preview_url"]).rstrip("/") or None) if s.get("preview_url") else None,
     )
     if settings.remote_approval not in {"tv", "level2"}:
         raise ConfigError("server.remote_approval must be 'tv' or 'level2'")
@@ -190,8 +198,30 @@ def parse(raw: dict, path: Path | None = None) -> Config:
             actions=actions,
             agent_options=dict(p.get("agent_options") or {}),
             previews=[str(x) for x in p.get("previews") or []],
+            preview=_preview(p.get("preview"), where),
         )
     return Config(settings=settings, machines=machines, projects=projects, path=path)
+
+
+def _preview(raw, where: str) -> dict:
+    if raw in (None, False):
+        return {} if raw is None else {"auto_open": "never"}
+    if isinstance(raw, str):
+        raw = {"command": raw}
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{where}.preview must be a command or a mapping")
+    unknown = set(raw) - {"command", "port", "path", "dir", "hmr", "auto_open", "label", "framework", "install"}
+    if unknown:
+        raise ConfigError(f"{where}.preview: unknown key(s) {sorted(unknown)}")
+    if "auto_open" in raw and raw["auto_open"] not in ("auto", "open", "offer", "never"):
+        raise ConfigError(f"{where}.preview.auto_open must be auto, open, offer or never")
+    if raw.get("port") is not None and not (1024 <= int(raw["port"]) <= 65535):
+        raise ConfigError(f"{where}.preview.port must be 1024-65535")
+    if raw.get("path") and not str(raw["path"]).startswith("/"):
+        raise ConfigError(f"{where}.preview.path must start with /")
+    if raw.get("dir") and (str(raw["dir"]).startswith("/") or ".." in str(raw["dir"]).split("/")):
+        raise ConfigError(f"{where}.preview.dir must be a folder inside the project")
+    return dict(raw)
 
 
 def load(path: Path | str | None = None) -> Config:
