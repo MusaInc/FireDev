@@ -235,3 +235,28 @@ test('the TV reconnects after its connection drops and resyncs state', async ({ 
   const p = await snap(page);
   expect(p.connection).toBe('connected');
 });
+
+test('the phone microphone page sends words that the TV shows, and can never approve', async ({ browser, request }) => {
+  const tv = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+  await open(tv);
+  await toWorkspace(tv);
+  await idle(tv);
+  const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  await phone.goto('/voice#t=' + encodeURIComponent(tokens().voice));
+  await expect(phone.locator('#conn')).toContainText('Connected');
+  await phone.fill('#text', 'Run the tests');
+  await phone.click('button.send');
+  await expect(tv.locator('.voice')).toContainText('Understood');
+  await expect(tv.locator('.voice')).toContainText('from your phone');
+  await expect(tv.locator('.result')).toBeVisible({ timeout: 30000 });
+  await tv.keyboard.press('Enter');
+  // Ask for a deploy from the phone: the page says to approve on the TV, and the approval waits there.
+  await phone.fill('#text', 'Deploy the preview');
+  await phone.click('button.send');
+  await expect(tv.locator('.approval')).toBeVisible();
+  await expect(phone.locator('#approval')).toBeVisible();
+  const denied = await api(request, 'approve_action', {}, tokens().voice);
+  expect(denied.ok).toBeFalsy();
+  await tv.keyboard.press('Enter'); // Reject is focused
+  await expect(tv.locator('.approval')).toHaveCount(0);
+});

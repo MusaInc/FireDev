@@ -169,6 +169,9 @@ class FireDev:
                 await s.open()
             except Exception as e:  # noqa: BLE001
                 return {"ok": False, "message": str(e), "project": s.project.id}
+        if s.agent_state["state"] == "unavailable":
+            return {"ok": True, "project": s.project.id,
+                    "message": f"Connected to {s.project.machine.display}, but {s.adapter.display} isn't installed there."}
         return {"ok": True, "project": s.project.id, "message": f"Connected to {s.project.machine.display}. {s.adapter.display} is ready."}
 
     async def _cmd_close_project(self, args, client):

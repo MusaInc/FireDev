@@ -31,11 +31,11 @@ how you give instructions.
 | Risk levels 0–3, approvals on the TV, held confirmation for level 3 | **Working**, tested with remote keys |
 | Agent requests outside its sandbox (`firedev run`, `firedev request`) gated by the TV | **Working**, tested |
 | Diff review, raw terminal output, undo of the agent's last change | **Working**, tested |
-| Fire TV app (Kotlin WebView shell + TV interface), D-pad only | **Working** in the browser at 1080p (11 remote-key tests); APK builds. **Not yet run on a physical Fire TV** |
-| Phone microphone (`/voice`): live transcript on the TV, typed fallback | **Working** typed and over WebSocket. Speech recognition needs HTTPS; not yet tried on a phone |
+| Fire TV app (Kotlin WebView shell + TV interface), D-pad only | **Working** in the browser at 1080p (12 remote-key tests); APK builds. **Not yet run on a physical Fire TV** |
+| Phone microphone (`/voice`): live transcript on the TV, typed fallback | **Working** (tested in a phone-sized browser and with streamed partial transcripts). Browser speech recognition needs HTTPS; not yet tried on a real phone |
 | Pairing a TV with a 6-digit code | **Working**, tested |
-| MCP server (`/mcp`, `firedev mcp` stdio) | **Working**, unit-tested |
-| Claude Code adapter (`claude -p --output-format stream-json`) | Implemented, parser tested; **not run end to end** |
+| MCP server (`/mcp`, `firedev mcp` stdio) | **Working**: unit-tested, and the stdio bridge was exercised against the running service |
+| Claude Code adapter (`claude -p --output-format stream-json`) | **Working**: a real turn through FireDev ran the tests via the helper (`tools/claude_check.py`) |
 | Plain shell adapter | Implemented |
 | Alexa | **Simulated**: a real Alexa Skills Kit endpoint (`/alexa`) and interaction model, driven from the phone page. Not published as a skill (no request-signature check yet) |
 | On-device speech on the TV | Used if the device has a recogniser; most Fire TVs don't |
@@ -148,8 +148,8 @@ continue · undo that change*. Anything else becomes a task for the coding agent
 
 ```bash
 cd backend && ../.venv/bin/python -m pytest -q                       # 78 unit tests
-FIREDEV_TEST_SSH=1 ../.venv/bin/python -m pytest -q                  # + 11 over real SSH/tmux to localhost
-npm run test:e2e                                                     # 11 TV tests driven by remote keys
+FIREDEV_TEST_SSH=1 ../.venv/bin/python -m pytest -q                  # + 12 over real SSH/tmux to localhost
+npm run test:e2e                                                     # 12 TV + phone tests driven by remote keys
 cd tv/android && ./gradlew testDebugUnitTest assembleDebug           # shell tests + APK
 .venv/bin/python tools/demo_flow.py                                  # the whole demo against real Codex
 ```

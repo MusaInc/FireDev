@@ -48,6 +48,7 @@ class MainActivity : Activity() {
         settings.applyIntent(intent)
         speech = SpeechInput.create(this, ::emit)
 
+        if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true)
         webView = WebView(this).apply {
             setBackgroundColor(Color.parseColor("#09090b"))
             isFocusable = true

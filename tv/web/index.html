@@ -12,6 +12,14 @@
     <div id="overlays"></div>
     <div id="toast" class="toast" aria-live="polite"></div>
   </div>
+  <div id="boot">Starting FireDev…</div>
+  <script>
+    // Plain ES5 on purpose: if the app bundle fails on this device's WebView, say so on screen instead of a blank TV.
+    window.onerror = function (msg, src, line) {
+      var b = document.getElementById('boot');
+      if (b) { b.className = 'failed'; b.textContent = 'FireDev could not start: ' + msg + ' (' + String(src).split('/').pop() + ':' + line + ')'; }
+    };
+  </script>
   <script src="dist/app.js"></script>
 </body>
 </html>

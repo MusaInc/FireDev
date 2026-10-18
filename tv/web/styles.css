@@ -44,7 +44,10 @@ body { font-family: "Outfit", system-ui, sans-serif; color: var(--text-1); -webk
 
 #stage { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; transform-origin: 0 0; overflow: hidden;
   background: radial-gradient(1400px 900px at 78% -10%, rgba(255,255,255,0.045), transparent 60%), var(--base); }
-#screen, #overlays { position: absolute; inset: 0; }
+/* Shown outside the scaled stage, so it reads before (or without) the app laying anything out. */
+#boot { position: fixed; left: 8%; right: 8%; top: 45%; font-size: 22px; color: var(--text-3); text-align: center; }
+#boot.failed { color: var(--bad); font-size: 16px; }
+#screen, #overlays { position: absolute; top: 0; right: 0; bottom: 0; left: 0; }
 #overlays { pointer-events: none; }
 #overlays > * { pointer-events: auto; }
 
@@ -106,7 +109,7 @@ body { font-family: "Outfit", system-ui, sans-serif; color: var(--text-1); -webk
 @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
 
 /* ---------- screens ---------- */
-.screen { position: absolute; inset: 0; padding: var(--screen-y) var(--screen-x); display: flex; flex-direction: column; animation: screen-in 260ms var(--ease); }
+.screen { position: absolute; top: 0; right: 0; bottom: 0; left: 0; padding: var(--screen-y) var(--screen-x); display: flex; flex-direction: column; animation: screen-in 260ms var(--ease); }
 @keyframes screen-in { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
 .topbar { display: flex; align-items: center; gap: 32px; height: 88px; flex: none; }
 .topbar .grow { flex: 1; min-width: 0; }
@@ -234,7 +237,7 @@ body { font-family: "Outfit", system-ui, sans-serif; color: var(--text-1); -webk
 .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 20px; color: var(--text-3); font-size: 32px; text-align: center; }
 
 /* ---------- overlays ---------- */
-.overlay { position: absolute; inset: 0; background: var(--scrim); display: flex; animation: fade-in 220ms var(--ease); }
+.overlay { position: absolute; top: 0; right: 0; bottom: 0; left: 0; background: var(--scrim); display: flex; animation: fade-in 220ms var(--ease); }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 .overlay.closing { animation: fade-out 180ms var(--ease) forwards; }
 @keyframes fade-out { to { opacity: 0; } }
@@ -277,7 +280,7 @@ body { font-family: "Outfit", system-ui, sans-serif; color: var(--text-1); -webk
 .voice-top { display: flex; align-items: flex-start; gap: 48px; }
 .mic { position: relative; width: 132px; height: 132px; flex: none; border-radius: 50%; background: var(--surface-2); display: flex; align-items: center; justify-content: center; }
 .mic svg { width: 56px; height: 56px; }
-.mic .ring { position: absolute; inset: -6px; border-radius: 50%; border: 3px solid var(--ivory); opacity: 0; }
+.mic .ring { position: absolute; top: -6px; right: -6px; bottom: -6px; left: -6px; border-radius: 50%; border: 3px solid var(--ivory); opacity: 0; }
 .voice.listening .mic { background: var(--ivory); color: var(--ink); }
 .voice.listening .mic .ring { animation: ring 1.8s var(--ease) infinite; }
 .voice.listening .mic .ring.r2 { animation-delay: 0.6s; }

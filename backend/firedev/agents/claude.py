@@ -24,8 +24,10 @@ class ClaudeAdapter(AgentAdapter):
     binary = "claude"
 
     def turn_command(self, prompt_file: str, thread_id: str | None, cwd: str, home: str) -> str:
+        tools = list(self.options.get("allowed_tools", ALLOWED_TOOLS))
+        tools.append(f"Bash({home}/.firedev/bin/firedev:*)")  # the prompt names the helper by absolute path
         args = [self.binary, "-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits",
-                "--allowedTools", ",".join(self.options.get("allowed_tools", ALLOWED_TOOLS))]
+                "--allowedTools", ",".join(tools)]
         if thread_id:
             args += ["--resume", thread_id]
         if self.options.get("model"):
