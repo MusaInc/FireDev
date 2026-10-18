@@ -128,21 +128,25 @@ To point an installed TV at a different service without rebuilding:
 ### Running behind HTTPS
 
 To reach FireDev from anywhere (and give the phone microphone the HTTPS that browser speech recognition needs),
-keep the service on `127.0.0.1` and put a reverse proxy in front of it. Set `server.public_url` to the public
-address and build the APK with `firedev.server=https://your-host`. With Caddy:
+keep the service on `127.0.0.1` and put a reverse proxy in front of it. FireDev works under a path on an existing
+site, so it needs no domain of its own. Set `server.public_url` to the public address (for example
+`https://example.com/firedev`) and build the APK with the same `firedev.server`. With Caddy, inside the site's
+`route` block:
 
 ```
-firedev.example.com {
-	route {
-		handle /alexa* {
-			respond 404   # no Alexa request-signature check yet
-		}
-		handle {
-			reverse_proxy 127.0.0.1:8130
-		}
-	}
+handle /firedev {
+	redir * /firedev/ 308
+}
+handle /firedev/alexa* {
+	respond 404   # no Alexa request-signature check yet
+}
+handle_path /firedev/* {
+	header Permissions-Policy "camera=(), microphone=(self), geolocation=()"   # the phone microphone page
+	reverse_proxy 127.0.0.1:8130
 }
 ```
+
+Behind a proxy the phone page can't reach the simulated Alexa endpoint; drive it from a local browser instead.
 
 Everything else is safe to expose: the API, `/mcp` and `/ws` need a paired token, a new TV only gets a pairing
 code (at most 16 wait at once, and a code is never reused while live), and only `firedev pair` on the service

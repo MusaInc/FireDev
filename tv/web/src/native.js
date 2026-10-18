@@ -20,7 +20,8 @@ export const native = {
     if (N && N.getConfig) {
       try { cfg = JSON.parse(N.getConfig()); } catch (e) { cfg = {}; }
     }
-    const fromPage = window.location.protocol.indexOf('http') === 0 ? window.location.origin : null;
+    // Served by FireDev at <base>/tv/, where <base> may include a path (https://example.com/firedev).
+    const fromPage = window.location.protocol.indexOf('http') === 0 ? window.location.origin + window.location.pathname.replace(/\/tv(\/.*)?$/, '') : null;
     return {
       server: param('server') || cfg.server || fromPage || 'http://10.0.2.2:8130',
       token: param('token') || cfg.token || null,

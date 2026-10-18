@@ -38,7 +38,7 @@ def create_app(config: Config, devices: DeviceStore) -> FastAPI:
 
     @app.get("/")
     async def index():
-        return RedirectResponse("/tv/")
+        return RedirectResponse("tv/")  # relative, so it also works under a path prefix
 
     @app.get("/api/health")
     async def health():

@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#09090b">
 <title>FireDev microphone</title>
 <style>
-  @font-face { font-family: Outfit; src: url("/tv/fonts/Outfit.woff2") format("woff2"); font-weight: 100 900; }
+  @font-face { font-family: Outfit; src: url("tv/fonts/Outfit.woff2") format("woff2"); font-weight: 100 900; }
   :root { --base: #09090b; --ivory: #f4f1ea; --ink: #15140f; --t2: rgba(244,241,234,.72); --t3: rgba(244,241,234,.5);
     --s1: rgba(255,255,255,.05); --s2: rgba(255,255,255,.09); --line: rgba(255,255,255,.12); --ok: #6fd6a0; --bad: #f2776b; --warn: #f2c25b; --live: #8fb8ff; }
   * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
@@ -91,6 +91,8 @@
 (function () {
   var KEY = 'firedev.voice.token';
   var token = null;
+  // FireDev may sit under a path (https://example.com/firedev/voice), so its routes are relative to this page.
+  var BASE = location.pathname.replace(/\/voice\/?$/, '');
   var m = /[#&]t=([^&]+)/.exec(location.hash);
   if (m) { token = decodeURIComponent(m[1]); try { localStorage.setItem(KEY, token); } catch (e) {} history.replaceState(null, '', location.pathname); }
   if (!token) { try { token = localStorage.getItem(KEY); } catch (e) {} }
@@ -109,7 +111,7 @@
 
   function connect() {
     var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(proto + '//' + location.host + '/ws?token=' + encodeURIComponent(token));
+    ws = new WebSocket(proto + '//' + location.host + BASE + '/ws?token=' + encodeURIComponent(token));
     ws.onopen = function () { setConn('ok', 'Connected'); };
     ws.onclose = function () { setConn('warn', 'Reconnecting'); setTimeout(connect, 1500); };
     ws.onmessage = function (e) {
@@ -165,7 +167,7 @@
     else for (var i = 0; i < INTENTS.length; i++) if (INTENTS[i][0].test(t)) { intent = { name: INTENTS[i][1], slots: {} }; break; }
     var body = { version: '1.0', session: { new: true, sessionId: 'sim-' + Date.now(), application: { applicationId: 'amzn1.ask.skill.firedev-sim' } },
       request: { type: 'IntentRequest', requestId: 'sim-' + Date.now(), locale: 'en-GB', timestamp: new Date().toISOString(), intent: intent } };
-    fetch('/alexa', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify(body) })
+    fetch(BASE + '/alexa', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify(body) })
       .then(function (r) { return r.json(); })
       .then(function (r) {
         var say = r.response && r.response.outputSpeech ? r.response.outputSpeech.text : '';
