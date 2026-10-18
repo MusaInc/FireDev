@@ -3,7 +3,11 @@
 
     <!-- Talks to your FireDev service over the network. -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- Only used if the device has an on-device speech recogniser (most Fire TVs don't; the phone mic and Alexa do the talking). -->
+    <!-- Finds FireDev computers on the same Wi-Fi (mDNS). -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- The TV's own microphone and speech recogniser: the normal way to talk to FireDev (the phone page on your Wi-Fi otherwise). -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <uses-feature android:name="android.software.leanback" android:required="false" />

@@ -23,7 +23,9 @@ import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import org.bouncycastle.jce.provider.BouncyCastleProvider
 import org.json.JSONObject
+import java.security.Security
 
 /**
  * FireDev on Fire TV: a full-screen WebView running the TV interface from assets, plus what only the device can
@@ -34,6 +36,8 @@ class MainActivity : Activity() {
     private lateinit var webView: WebView
     private lateinit var settings: ServerSettings
     private var speech: SpeechInput? = null
+    private lateinit var connection: Connection
+    private var discovery: Discovery? = null
     private val main = Handler(Looper.getMainLooper())
     private val queued = mutableListOf<String>()
     private var pageReady = false
@@ -47,6 +51,12 @@ class MainActivity : Activity() {
 
         settings = ServerSettings(getSharedPreferences("firedev", MODE_PRIVATE), BuildConfig.FIREDEV_SERVER, BuildConfig.FIREDEV_TOKEN)
         settings.applyIntent(intent)
+        // sshj needs the full BouncyCastle, not Android's trimmed copy registered under the same name.
+        Security.removeProvider("BC")
+        Security.insertProviderAt(BouncyCastleProvider(), 1)
+        // The user's own machine: a computer on this Wi-Fi or their SSH server, reached through 127.0.0.1 relays.
+        connection = Connection(getSharedPreferences("firedev", MODE_PRIVATE), ::emit)
+        connection.start()
         speech = SpeechInput.create(this, ::emit)
 
         if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true)
@@ -114,6 +124,8 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        discovery?.stop()
+        connection.transport?.close()
         speech?.destroy()
         webView.destroy()
         super.onDestroy()
@@ -159,7 +171,28 @@ class MainActivity : Activity() {
 
     /** The JavaScript interface used by tv/web/src/native.js. */
     inner class Bridge {
-        @JavascriptInterface fun getConfig(): String = settings.toJson(BuildConfig.VERSION_NAME).toString()
+        @JavascriptInterface fun getConfig(): String {
+            val cfg = settings.toJson(BuildConfig.VERSION_NAME)
+            val c = connection.config()
+            if (c != null) {
+                for (k in c.keys()) cfg.put(k, c.get(k))
+            } else if (settings.isDefaultServer && BuildConfig.FIREDEV_SERVER.isBlank()) {
+                cfg.put("server", "") // nothing chosen yet: the interface starts the setup
+            }
+            return cfg.put("device", connection.tvName).put("transports", true).toString()
+        }
+        @JavascriptInterface fun startDiscovery() = main.post {
+            if (discovery == null) discovery = Discovery(this@MainActivity) { list -> emit(JSONObject().put("type", "discovery").put("machines", list)) }
+            discovery?.start()
+        }.let { }
+        @JavascriptInterface fun stopDiscovery() = main.post { discovery?.stop() }.let { }
+        @JavascriptInterface fun connectLan(json: String) = connection.connectLan(JSONObject(json))
+        @JavascriptInterface fun connectSsh(json: String) = connection.connectSsh(JSONObject(json))
+        @JavascriptInterface fun trustHostKey(fingerprint: String) = connection.trustHostKey(fingerprint)
+        @JavascriptInterface fun publicKey(): String = connection.publicKey()
+        @JavascriptInterface fun pairCode(claim: String, nonce: String): String? = connection.pairCode(claim, nonce)
+        @JavascriptInterface fun paired() = connection.paired()
+        @JavascriptInterface fun forgetConnection() = connection.forget()
         @JavascriptInterface fun speechAvailable(): Boolean = speech != null
         @JavascriptInterface fun startSpeech() = main.post {
             if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {

@@ -25,7 +25,7 @@ export class CenterScreen {
 
   update() {
     const app = this.app;
-    const sig = [app.status, app.pairingCode, app.pairingExpired, app.linkDown].join('|');
+    const sig = [app.status, app.pairingCode, app.pairingExpired, app.linkDown, app.pairingMismatch, app.pairingMachine].join('|');
     if (sig === this.sig) return;
     this.sig = sig;
     clear(this.body);
@@ -45,9 +45,11 @@ export class CenterScreen {
       this.countdown = h('div.t-meta.pair-countdown', { style: 'margin-top:28px' });
       this.body.append(...[
         h('div.t-meta', null, 'One-time setup'),
-        h('div.t-title', { style: 'margin-top:16px' }, 'Pair this TV with FireDev'),
+        h('div.t-title', { style: 'margin-top:16px' }, app.pairingMachine ? 'Pair this TV with ' + app.pairingMachine : 'Pair this TV with FireDev'),
         h('div.code-digits', null, digits),
-        h('div.t-body.muted', { style: 'margin-top:48px' }, 'On the machine running FireDev, run:'),
+        app.pairingMismatch ? h('div.t-body.bad', { style: 'margin-top:28px;max-width:1500px' },
+          'Careful: this connection doesn’t match the computer’s certificate, so something on the network may be in between. The code won’t work; check your network.') : null,
+        h('div.t-body.muted', { style: 'margin-top:48px' }, 'On ' + (app.pairingMachine || 'the machine running FireDev') + ', run:'),
         h('div.terminal', null, h('span.dim', null, '$ '), 'firedev pair ' + c),
         this.countdown,
         app.linkDown ? h('div.t-meta', { style: 'margin-top:12px' }, 'Reconnecting to FireDev… the code stays the same.') : null].filter(Boolean));
@@ -59,11 +61,13 @@ export class CenterScreen {
     this.body.append(...[
       h('div.t-meta', null, offline ? 'Can’t reach FireDev' : 'Starting'),
       h('div.t-title', { style: 'margin-top:16px' }, offline ? 'Looking for your FireDev service…' : 'Connecting to FireDev…'),
-      h('div.terminal', null, app.config.server),
+      h('div.terminal', null, app.config.connection ? app.config.connection.name + (app.config.connection.mode === 'ssh' ? ' · SSH ' + app.config.connection.user + '@' + app.config.connection.host
+        : ' · ' + app.config.connection.host) : app.config.server),
       h('div.t-body.muted', { style: 'margin-top:36px' }, offline
         ? 'Make sure `firedev serve` is running and this TV can reach it. FireDev keeps trying.'
         : 'This takes a moment.'),
-      offline ? h('div', { style: 'margin-top:48px' }, focusable(h('button.btn.primary', null, 'Try again'), 'retry', { select: () => app.link.reconnectNow() })) : null].filter(Boolean));
+      offline ? h('div', { style: 'margin-top:48px;display:flex;gap:24px' }, focusable(h('button.btn.primary', null, 'Try again'), 'retry', { select: () => app.link.reconnectNow() }),
+        app.config.transports ? focusable(h('button.btn', null, 'Connect to another machine'), 'change', { select: () => app.changeConnection() }) : null) : null].filter(Boolean));
   }
 
   back() { this.app.overlays.confirmExit(); }

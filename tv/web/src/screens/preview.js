@@ -94,7 +94,7 @@ export class PreviewScreen {
   connect(opts) {
     opts = opts || {};
     this.ticketing = true;
-    this.app.command('preview_open', { project: this.pid, base: this.app.config.server, start: !!opts.start, install: !!opts.install,
+    this.app.command('preview_open', { project: this.pid, base: this.app.config.server, preview_base: this.app.config.previewBase, start: !!opts.start, install: !!opts.install,
       path: opts.path || this.page || null, screenshots: !!opts.screenshots, dir: opts.dir }).then((r) => {
       this.ticketing = false;
       if (this.gone) return;

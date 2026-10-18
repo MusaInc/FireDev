@@ -22,12 +22,28 @@ export const native = {
     }
     // Served by FireDev at <base>/tv/, where <base> may include a path (https://example.com/firedev).
     const fromPage = window.location.protocol.indexOf('http') === 0 ? window.location.origin + window.location.pathname.replace(/\/tv(\/.*)?$/, '') : null;
+    // The Fire TV app with its own transports: an empty server means nothing is chosen yet (first run).
+    const shellServer = N && cfg.transports ? cfg.server : cfg.server || null;
     return {
-      server: param('server') || cfg.server || fromPage || 'http://10.0.2.2:8130',
+      server: param('server') || (shellServer !== null && shellServer !== undefined ? shellServer : fromPage || 'http://10.0.2.2:8130'),
       token: param('token') || cfg.token || null,
       version: cfg.version || 'web',
+      previewBase: cfg.previewBase || null,
+      connection: cfg.connection || null,
+      device: cfg.device || null,
+      transports: !!(N && cfg.transports),
     };
   },
+  /** Local-first connections, done by the app shell (LAN discovery and TLS, or SSH). */
+  startDiscovery() { if (N && N.startDiscovery) N.startDiscovery(); },
+  stopDiscovery() { if (N && N.stopDiscovery) N.stopDiscovery(); },
+  connectLan(machine) { if (N && N.connectLan) N.connectLan(JSON.stringify(machine)); },
+  connectSsh(opts) { if (N && N.connectSsh) N.connectSsh(JSON.stringify(opts)); },
+  trustHostKey(fp) { if (N && N.trustHostKey) N.trustHostKey(fp); },
+  publicKey() { return N && N.publicKey ? N.publicKey() : null; },
+  pairCode(claim, nonce) { return N && N.pairCode ? N.pairCode(claim, nonce) : null; },
+  paired() { if (N && N.paired) N.paired(); },
+  forgetConnection() { if (N && N.forgetConnection) N.forgetConnection(); },
   speechAvailable() { return !!(N && N.speechAvailable && N.speechAvailable()); },
   /** Text to speech: the shell's Android TextToSpeech, or the browser's speech synthesis in the preview. Reports
    *  {type: 'tts', phase: 'start' | 'done' | 'stopped' | 'error', id} through onEvent. */

@@ -13,6 +13,9 @@ class ServerSettings(private val prefs: SharedPreferences, private val defaultSe
     val server: String get() = prefs.getString(KEY_SERVER, null) ?: defaultServer
     val token: String? get() = (prefs.getString(KEY_TOKEN, null) ?: defaultToken).ifBlank { null }
 
+    /** No server set by intent: the build's default (empty for local-first builds). */
+    val isDefaultServer: Boolean get() = prefs.getString(KEY_SERVER, null) == null
+
     /** Returns true if the intent changed the settings. */
     fun applyIntent(intent: Intent?): Boolean {
         val server = intent?.getStringExtra("server")?.trim()?.trimEnd('/')

@@ -16,11 +16,12 @@ import { DiffScreen } from './screens/diff.js';
 import { CenterScreen } from './screens/center.js';
 import { SurfaceScreen } from './screens/surface.js';
 import { PreviewScreen } from './screens/preview.js';
+import { ConnectScreen } from './screens/connect.js';
 import { createPreview } from './preview.js';
 import { Overlays } from './overlays.js';
 import { createVoice } from './voice.js';
 
-const SCREENS = { home: HomeScreen, workspace: WorkspaceScreen, activity: ActivityScreen, diff: DiffScreen, center: CenterScreen, surface: SurfaceScreen, preview: PreviewScreen };
+const SCREENS = { home: HomeScreen, workspace: WorkspaceScreen, activity: ActivityScreen, diff: DiffScreen, center: CenterScreen, surface: SurfaceScreen, preview: PreviewScreen, connect: ConnectScreen };
 
 export function createApp() {
   const stage = document.getElementById('stage');
@@ -171,9 +172,18 @@ export function createApp() {
   function onMessage(msg) {
     if (msg.type === 'pairing') {
       // The same code comes back on every reconnect until it expires; only redraw when it actually changes.
-      const changed = msg.code !== app.pairingCode || app.route.name !== 'center';
+      // Over a LAN connection the code comes from the certificate this TV actually reached (the shell knows it).
+      // If it differs from the computer's, someone is in between: show ours, which the computer will refuse.
+      let code = msg.code;
+      app.pairingMismatch = false;
+      if (msg.bound && msg.nonce) {
+        const own = native.pairCode(app.link.claim, msg.nonce);
+        if (own) { app.pairingMismatch = own !== msg.code; code = own; }
+      }
+      app.pairingMachine = msg.machine || null;
+      const changed = code !== app.pairingCode || app.route.name !== 'center';
       app.status = 'pairing';
-      app.pairingCode = msg.code;
+      app.pairingCode = code;
       app.pairingExpiresAt = Date.now() + (msg.expires_in != null ? msg.expires_in : 600) * 1000;
       app.pairingExpired = app.pairingExpiresAt <= Date.now();
       app.linkDown = false;
@@ -316,7 +326,8 @@ export function createApp() {
       app.linkDown = keepCode;
     }
     if (s === 'online') app.linkDown = false;
-    if (!app.everOnline && app.route.name !== 'center') app.navigate('center');
+    if (app.route.name === 'connect') app.render();
+    else if (!app.everOnline && app.route.name !== 'center') app.navigate('center');
     else if (was !== app.status + (app.linkDown ? '~' : '')) app.render();
   }
 
@@ -340,10 +351,36 @@ export function createApp() {
     if (e.type === 'lifecycle' && e.state === 'resume') app.link.reconnectNow();
     if (e.type === 'speech') app.voice.onNative(e);
     if (e.type === 'tts') app.voice.onTts(e);
+    if (e.type === 'discovery') { app.discovered = e.machines || []; app.render(); }
+    if (e.type === 'connection') app.onConnection(e);
   });
 
-  app.link = createLink({ server: app.config.server, token: app.config.token, onMessage, onStatus });
-  app.navigate('center');
+  /** The Fire TV app connected (or lost, or forgot) the machine: point the link at its 127.0.0.1 relay. */
+  app.onConnection = function (e) {
+    if (e.state === 'ready') {
+      app.config = native.config();
+      app.everOnline = false;
+      app.link.setServer(app.config.server, e.token || app.config.token || undefined);
+      app.navigate('center');
+      return;
+    }
+    if (e.state === 'forgotten') {
+      app.config = native.config();
+      app.link.setServer('', null);
+      app.navigate('connect');
+      return;
+    }
+    if (app.route.name === 'connect' && app.screen.onConnection) app.screen.onConnection(e);
+    else if (e.state === 'error' && app.config.server) app.toast(e.message, 'warn');
+  };
+
+  app.changeConnection = function () {
+    app.overlays.confirm('Connect to a different machine?', 'This TV forgets ' + ((app.config.connection && app.config.connection.name) || 'this machine') +
+      '. Your projects and agents there keep running.', 'Change', () => native.forgetConnection());
+  };
+
+  app.link = createLink({ server: app.config.server, token: app.config.token, onMessage, onStatus, onPaired: () => native.paired() });
+  app.navigate(app.config.transports && !app.config.server ? 'connect' : 'center');
   app.link.connect();
   window.__firedev = app;
   return app;

@@ -60,6 +60,13 @@ export class HomeScreen {
       icon('plus'),
       h('div.t-label', null, 'Phone microphone'),
       h('div.t-meta', { style: 'margin-top:10px' }, 'Scan to speak from your phone')), 'phone-mic', { select: () => app.overlays.openPhoneLink() }));
+    const c = app.config.connection;
+    if (c) {
+      this.cards.appendChild(focusable(h('div.card.add-card', null, icon(c.mode === 'ssh' ? 'terminal' : 'code'),
+        h('div.t-label.clip', null, c.name),
+        h('div.t-meta', { style: 'margin-top:10px' }, (c.mode === 'ssh' ? 'SSH · ' + c.user + '@' + c.host : 'This Wi-Fi · ' + c.host) + ' · OK to change')),
+      'connection', { select: () => app.changeConnection() }));
+    }
   }
 
   back() {

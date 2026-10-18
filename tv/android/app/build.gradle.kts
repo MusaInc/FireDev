@@ -22,9 +22,9 @@ android {
         applicationId = "dev.firedev.tv"
         minSdk = 22
         targetSdk = 34
-        versionCode = 4
-        versionName = "0.2.0"
-        buildConfigField("String", "FIREDEV_SERVER", "\"${setting("firedev.server", "http://10.0.2.2:8130")}\"")
+        versionCode = 5
+        versionName = "0.3.0"
+        buildConfigField("String", "FIREDEV_SERVER", "\"${setting("firedev.server", "")}\"")
         buildConfigField("String", "FIREDEV_TOKEN", "\"${setting("firedev.token", "")}\"")
     }
 
@@ -44,6 +44,10 @@ android {
     buildFeatures.buildConfig = true
     testOptions.unitTests.isReturnDefaultValues = true
 
+    packaging.resources.excludes += setOf("META-INF/versions/9/OSGI-INF/MANIFEST.MF", "META-INF/DEPENDENCIES", "META-INF/LICENSE*", "META-INF/NOTICE*")
+    // Transport tests reach a real sshd and a real FireDev service (FIREDEV_TEST_TRANSPORT=1).
+    testOptions.unitTests.all { it.environment("FIREDEV_REPO", rootProject.file("../..").absolutePath) }
+
     sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/firedev-web"))
 }
 
@@ -57,6 +61,11 @@ val copyWeb by tasks.registering(Sync::class) {
 tasks.named("preBuild") { dependsOn(copyWeb) }
 
 dependencies {
+    // SSH from the TV to the user's own server (remote mode); BouncyCastle for its key exchange on Android.
+    implementation("com.hierynomus:sshj:0.39.0")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
+    implementation("net.i2p.crypto:eddsa:0.3.0") // the TV key (Ed25519), the type sshj signs with
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
+    testImplementation("com.squareup.okhttp3:okhttp:4.12.0")
 }

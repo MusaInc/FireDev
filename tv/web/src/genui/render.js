@@ -503,7 +503,7 @@ export class SurfaceRenderer {
       sandbox: 'allow-scripts allow-same-origin' + (live ? ' allow-forms' : ''), referrerpolicy: live ? 'no-referrer' : null });
     if (live) {
       // The project's own dev server, through FireDev's preview gateway (a one-time address for this TV).
-      this.app.link.command('preview_open', { project: this.pid, base: this.app.config.server }).then((r) => {
+      this.app.link.command('preview_open', { project: this.pid, base: this.app.config.server, preview_base: this.app.config.previewBase }).then((r) => {
         const url = r.ok && r.result && r.result.url;
         if (url) frame.src = url;
         else frame.replaceWith(h('div.g-sub', { style: 'padding:40px' }, 'The live preview isn’t running. Say “show the preview” to start it.'));

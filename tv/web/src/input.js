@@ -44,6 +44,9 @@ export function createInput(onAction) {
   }
 
   function key(e, down) {
+    // Typing in a field (the SSH setup): letters, space and Backspace edit it; Up/Down leave it, Back and OK as usual.
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') && !/^(Escape|Enter|ArrowUp|ArrowDown|GoBack|BrowserBack)$/.test(e.key) && e.keyCode !== 4) return;
     const action = MAP[e.key] || KEYCODES[e.keyCode];
     if (!action) return;
     e.preventDefault();

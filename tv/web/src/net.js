@@ -26,7 +26,7 @@ function storage(k, v) {
   return null;
 }
 
-export function createLink({ server, token, onMessage, onStatus }) {
+export function createLink({ server, token, onMessage, onStatus, onPaired }) {
   let ws = null;
   let seq = 0;
   let delay = 800;
@@ -44,6 +44,7 @@ export function createLink({ server, token, onMessage, onStatus }) {
   }
 
   function connect() {
+    if (!server) return; // the Fire TV app hasn't chosen a machine yet
     closedByUs = false;
     onStatus('connecting');
     try {
@@ -72,6 +73,7 @@ export function createLink({ server, token, onMessage, onStatus }) {
         storage(TOKEN_KEY, null);
       }
       if (msg.type === 'paired') {
+        if (onPaired) onPaired(msg);
         currentToken = msg.token;
         storage(TOKEN_KEY, msg.token);
         claim = newClaim(); // used up: a later unpairing starts from a fresh code
@@ -133,6 +135,14 @@ export function createLink({ server, token, onMessage, onStatus }) {
     newCode() { if (!send({ op: 'new_code' })) this.reconnectNow(); },
     reconnectNow() { if (ws) { try { ws.close(); } catch (e) { /* will reconnect */ } } else connect(); },
     forget() { currentToken = null; storage(TOKEN_KEY, null); },
+    /** A new machine (the Fire TV app connected somewhere else): its address, and its token if it gave one. */
+    setServer(url, token) {
+      server = url;
+      if (token !== undefined) { currentToken = token || null; storage(TOKEN_KEY, currentToken); }
+      delay = 800;
+      if (ws && ws.readyState < 2) { closedByUs = false; try { ws.close(); } catch (e) { /* reconnects to the new address */ } } else connect();
+    },
     get token() { return currentToken; },
+    get claim() { return claim; },
   };
 }
