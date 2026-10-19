@@ -968,13 +968,14 @@ class ProjectSession:
         the task up: don't say it twice."""
         ts, tid = self._agent_spoke
         if tid == task_id and time.time() - ts < WRAP_UP_WINDOW and not any(
-                a.get("task") == task_id and a["ts"] > ts and a["kind"] in ("command", "file", "tests", "build") for a in self.activity):
+                a.get("task") == task_id and a["ts"] > ts and a["kind"] in ("command", "file", "tests", "build")
+                and not re.match(r"(\S*/)?firedev\s", a.get("detail") or "") for a in self.activity):
             return True  # its last word came after its last step: that was the wrap-up
         words = lambda t: {w for w in re.findall(r"[a-z0-9]+", t.lower()) if len(w) > 3}
         new = words(text)
         for ts, tid, old in self._said:
             if tid == task_id and time.time() - ts < REPEAT_WINDOW and new:
-                if len(new & words(old)) / len(new) >= 0.4:
+                if len(new & words(old)) / len(new) >= 0.3:
                     return True
         return False
 

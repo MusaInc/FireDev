@@ -167,3 +167,13 @@ def test_words_before_the_last_step_are_not_a_wrap_up(tmp_path):
     s._agent_spoke = (time.time() - 5, "t1")
     s.add_activity("tests", "Tests: 14 / 14 passed", task="t1")
     assert not s._just_said("All 14 checks passed. Here's the tour: the night sky up top, the cabins below.", "t1")
+
+
+def test_firedev_helper_commands_after_the_tour_do_not_count_as_steps(tmp_path):
+    import time
+    from test_preview import make_service
+    svc, _ = make_service(tmp_path)
+    s = svc.sessions["web"]
+    s._agent_spoke = (time.time() - 5, "t1")
+    s.add_activity("command", "Checking the live preview", detail="firedev preview status", task="t1")
+    assert s._just_said("All 14 checks passed, from phone to TV size.", "t1")
