@@ -910,3 +910,12 @@ body { font-family: "Outfit", system-ui, sans-serif; color: var(--text-1); -webk
 .pv-reveal .pv-reveal-label { display: flex; animation: fade-in 500ms var(--ease) 300ms both; }
 .pv-reveal-dot { width: 14px; height: 14px; border-radius: 50%; flex: none; background: var(--ember); }
 @keyframes reveal-in { from { opacity: 0.4; transform: scale(0.94); } to { opacity: 1; transform: none; } }
+
+/* Camera direction: a quiet label for what the view is doing ("Exploring the page", "Updating the rooms section"). */
+.pv-cam { position: absolute; right: 22px; bottom: 20px; z-index: 3; display: flex; align-items: center; gap: 12px; height: 46px; padding: 0 20px;
+  max-width: 70%; border-radius: 999px; background: rgba(10, 10, 12, 0.78); border: 1px solid var(--line-strong); color: var(--text-2);
+  font-size: 20px; font-weight: 500; opacity: 0; transform: translateY(8px); transition: opacity 400ms var(--ease), transform 400ms var(--ease); pointer-events: none; }
+.pv-cam.on { opacity: 1; transform: none; }
+.pv-cam-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; background: var(--text-3); }
+.pv-cam-dot.follow { background: var(--ember-2); box-shadow: 0 0 10px var(--ember-glow); }
+.pv-using .pv-cam { display: none; }

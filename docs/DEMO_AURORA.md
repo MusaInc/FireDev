@@ -133,3 +133,23 @@ Failures the rehearsals found, now fixed:
 - Timings: each task records when it was heard, dispatched, Codex's first event, first file, first speech and
   done. They're in the task snapshot and logged as `timings <project> <task>: …`.
   The phone mic sends as soon as the words are final (at most 0.7 s after release) and reports how long recognition took.
+
+## Camera direction in the live preview (2026-10-19)
+
+While Codex works, the preview directs itself, and everything it shows is the real page:
+
+- **Following edits comes first.** Each real code change is mapped to the page element it touched: ids and classes
+  on changed HTML lines (or the nearest tag above a text edit), the rule selectors of changed CSS, the element using a
+  changed image or SVG, and `querySelector` targets in JS. The view glides there (eased, about 1.5 s) and, once the saved
+  version has rendered, outlines that element once. Labels read "Updating the cabins section". Theme-wide changes
+  (`:root`, `body`), selectors that match many things (`.card`), and elements parked off the page keep the current
+  view.
+- **Touring when quiet.** After 12 s without a visible update while Codex works, it holds each real section for 7 s
+  and glides to the next ("Exploring the page"), then drifts back to the top at the end.
+- **Viewer first.** Any remote key, "Use the page", or scrolling/touching the page stops it at once. It resumes after
+  20 s without a key. The view's position survives reloads.
+- Made for Fire TV WebViews: the in-page helper is plain ES5 and scrolls by hand per frame, not with smooth scrolling.
+
+Tests: `npx playwright test --config e2e/camera.config.mjs` (mapping, tour, follow and highlight, viewer takeover,
+naming), plus the live-build test in `e2e/preview.spec.mjs`. Real-Codex rehearsal take 7 toured and followed edits
+for the whole build.

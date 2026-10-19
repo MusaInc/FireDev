@@ -12,6 +12,7 @@
 import { liveState, STAGES } from '../live.js';
 import { nowPanel } from './livebits.js';
 import { CodePanel } from '../codepanel.js';
+import { hintsFor } from '../camera.js';
 import { clear, focusable, h, icon } from '../util.js';
 import { SPLITS, VIEWPORTS, ZOOMS } from '../preview.js';
 import { agentPill, connPill } from './common.js';
@@ -50,8 +51,11 @@ export class PreviewScreen {
     this.statusEl = h('div.pv-status');
     this.banner = h('div.pv-banner');
     this.revealEl = h('div.pv-reveal-label');
+    this.camEl = h('div.pv-cam');
+    // Camera direction (see camera.js and the page helper): follow real edits, tour the page when nothing changes.
+    this.cam = { mode: 'off', lastVisible: Date.now(), pausedUntil: 0, pending: null, labelTimer: 0 };
     this.device = h('div.pv-device');
-    this.box = focusable(h('div.pv-box', null, this.device, this.statusEl, this.banner, this.revealEl,
+    this.box = focusable(h('div.pv-box', null, this.device, this.statusEl, this.banner, this.revealEl, this.camEl,
       h('div.pv-fullhint', null, 'OK: use the page  ·  ↓ Controls  ·  ◁ Split screen')), 'frame', {
       select: () => this.interact(!this.interacting),
     });
@@ -81,6 +85,7 @@ export class PreviewScreen {
       this.toolbar, this.sink);
     this.onBlur = () => setTimeout(() => this.reclaim(), 0);
     this.ticker = setInterval(() => { if (!this.gone) this.update(); }, 5000); // the quiet line moves on by itself
+    this.camTicker = setInterval(() => this.camTick(), 2000);
     window.addEventListener('blur', this.onBlur);
     this.applyPrefs(true);
     // Opened mid-build: replay what the agent just wrote (labelled with how long ago), newest last.
@@ -194,9 +199,15 @@ export class PreviewScreen {
       case 'css':
         if (!m.n) this.swapReload(); // no stylesheet to swap: reload the page instead
         break;
+      case 'cssdone':
+        this.camRendered();
+        break;
+      case 'camera':
+        this.camState(m);
+        break;
       case 'hello':
       case 'nav':
-        if (m.fd === 'hello') this.content = typeof m.content === 'number' ? m.content : 1;
+        if (m.fd === 'hello') { this.content = typeof m.content === 'number' ? m.content : 1; this.camRendered(); }
         this.ready = true;
         this.retries = 0;
         this.page = typeof m.page === 'string' ? m.page.slice(0, 300) : this.page;
@@ -254,6 +265,7 @@ export class PreviewScreen {
     opts = opts || {};
     if (!this.frame) { this.connect({ screenshots: this.screenshots }); return; }
     if (!this.ready) { if (!this.post({ op: 'reload' })) this.reconnect(); return; }
+    this.cam.lastVisible = Date.now();
     if (opts.css) this.post({ op: 'css' });
     else this.swapReload();
     if (reason && reason !== 'reload') {
@@ -292,6 +304,7 @@ export class PreviewScreen {
     this.title = typeof m.title === 'string' ? m.title.slice(0, 120) : this.title;
     this.reclaim();
     this.update();
+    this.camRendered();
   }
 
   dropNext() {
@@ -363,6 +376,7 @@ export class PreviewScreen {
 
   interact(on) {
     this.interacting = !!on && !!this.frame && this.ready;
+    if (this.interacting) this.camPause();
     this.el.classList.toggle('pv-using', this.interacting);
     if (this.interacting) this.post({ op: 'ring', show: true });
     else { this.typing = false; this.post({ op: 'ring', show: false }); }
@@ -370,6 +384,7 @@ export class PreviewScreen {
   }
 
   key(action, down) {
+    if (down) this.camPause();
     if (this.revealing && down) { this.endReveal(); return action === 'back' || action === 'select'; }
     if (!down) return action === 'select' && this.interacting;
     const onFrame = this.app.focus.focusedId() === 'frame';
@@ -392,7 +407,79 @@ export class PreviewScreen {
 
   close() { this.app.go('workspace', this.pid); }
 
-  onCode(change, ts) { this.code.enqueue(change, ts); this.layout(); }
+  onCode(change, ts) { this.code.enqueue(change, ts); this.layout(); this.camFollow(change); }
+
+  // --- camera direction ---------------------------------------------------------------------------------------
+
+  /** A real edit landed: bring the part of the page it touched into view now, and highlight it once the saved
+   *  version has rendered (the next page load or stylesheet swap; or shortly, if that already happened). */
+  camFollow(change) {
+    this.cam.lastVisible = Date.now();
+    const hints = hintsFor(change);
+    if (!hints.length || !this.frame || this.interacting || Date.now() < this.cam.pausedUntil) return;
+    this.setCamMode('off');
+    this.post({ op: 'focus', hints, highlight: false });
+    this.cam.pending = { hints, at: Date.now() };
+    clearTimeout(this.cam.flushTimer);
+    this.cam.flushTimer = setTimeout(() => this.camRendered(), 6000);
+  }
+
+  camRendered() {
+    if (this.cam.mode === 'tour') this.cam.mode = 'off'; // a fresh page has no tour running: camTick restarts it
+    const p = this.cam.pending;
+    if (!p || this.gone) return;
+    this.cam.pending = null;
+    clearTimeout(this.cam.flushTimer);
+    if (Date.now() - p.at < 20000 && !this.interacting && Date.now() >= this.cam.pausedUntil) {
+      // Give the new version a moment to lay itself out first.
+      setTimeout(() => { if (!this.gone) this.post({ op: 'focus', hints: p.hints, highlight: true }); }, 450);
+    }
+  }
+
+  /** Tour the page while the agent works and nothing visible has changed for a while; otherwise hold still. */
+  camTick() {
+    if (this.gone) return;
+    const p = this.app.project(this.pid);
+    const live = p && liveState(p);
+    const quiet = Date.now() - this.cam.lastVisible > 12000;
+    const want = this.frame && this.ready && this.content !== 0 && live && live.running && !this.interacting
+      && quiet && Date.now() >= this.cam.pausedUntil ? 'tour' : 'off';
+    this.setCamMode(want);
+  }
+
+  setCamMode(mode) {
+    if (this.cam.mode === mode) return;
+    this.cam.mode = mode;
+    this.post({ op: 'camera', mode });
+    if (mode === 'off' && this.cam.label === 'tour') this.camLabel(null);
+  }
+
+  /** The remote is in use: stop all automatic movement now; it resumes after 20 s without a key. */
+  camPause() {
+    this.cam.pausedUntil = Date.now() + 20000;
+    this.cam.pending = null;
+    this.setCamMode('off');
+    this.camLabel(null);
+  }
+
+  camState(m) {
+    if (m.state === 'tour') this.camLabel('tour', 'Exploring the page');
+    else if (m.state === 'follow') {
+      const n = String(m.name || '').slice(0, 40);
+      const text = !n ? 'Updating the page' : /^“/.test(n) ? 'Updating ' + n : /^(header|footer|navigation)$/.test(n) ? 'Updating the ' + n : 'Updating the ' + n + ' section';
+      this.camLabel('follow', text, 4500);
+    } else if (m.state === 'paused') { this.cam.pausedUntil = Date.now() + 20000; this.cam.mode = 'off'; this.camLabel(null); }
+    else if (m.state === 'still') this.camLabel(null);
+  }
+
+  camLabel(kind, text, ms) {
+    clearTimeout(this.cam.labelTimer);
+    this.cam.label = kind;
+    if (!kind) { this.camEl.classList.remove('on'); return; }
+    clear(this.camEl).append(h('span.pv-cam-dot' + (kind === 'follow' ? '.follow' : '')), h('span.clip', null, text));
+    this.camEl.classList.add('on');
+    if (ms) this.cam.labelTimer = setTimeout(() => { if (this.cam.label === kind) this.camLabel(this.cam.mode === 'tour' ? 'tour' : null, 'Exploring the page'); }, ms);
+  }
 
   /** Three columns (agent, page, code) while there's code to show or the agent is building; two otherwise. */
   codeVisible() {
@@ -406,6 +493,9 @@ export class PreviewScreen {
     this.code.destroy();
     this.gone = true;
     clearInterval(this.ticker);
+    clearInterval(this.camTicker);
+    clearTimeout(this.cam.labelTimer);
+    clearTimeout(this.cam.flushTimer);
     clearTimeout(this.revealTimer);
     window.removeEventListener('blur', this.onBlur);
     clearTimeout(this.flashTimer);

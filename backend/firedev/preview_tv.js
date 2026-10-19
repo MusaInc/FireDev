@@ -161,9 +161,181 @@
     return best;
   }
 
+  // --- camera: the TV's view of the page while the agent works ---------------------------------------------------
+  // A gentle tour of the real page's sections while nothing changes, and a smooth move to whatever a real edit
+  // touched (found from hints the TV derives from the edited code). Scrolling is eased by hand (scrollTo per frame):
+  // older TV WebViews ignore smooth scrolling. Anything the viewer does stops it at once.
+  var cam = { tour: false, timer: 0, anim: 0, hl: null, hlTimer: 0 };
+  var DWELL = 7000;
+
+  function closestEl(el, sel) {
+    while (el && el.nodeType === 1) { if ((el.matches || el.webkitMatchesSelector || el.msMatchesSelector).call(el, sel)) return el; el = el.parentElement; }
+    return null;
+  }
+  function topOf(el) { return el.getBoundingClientRect().top + (window.pageYOffset || document.documentElement.scrollTop || 0); }
+  function scrollY() { return window.pageYOffset || document.documentElement.scrollTop || 0; }
+  function maxY() { return Math.max(0, (document.documentElement.scrollHeight || 0) - window.innerHeight); }
+
+  function glide(to, ms, done) {
+    cancelGlide();
+    var from = scrollY();
+    to = Math.max(0, Math.min(maxY(), Math.round(to)));
+    if (Math.abs(to - from) < 4) { if (done) done(); return; }
+    var start = 0;
+    function step(t) {
+      if (!start) start = t;
+      var k = Math.min(1, (t - start) / ms);
+      var e = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2; // ease in and out
+      window.scrollTo(0, from + (to - from) * e);
+      drawHighlight();
+      if (k < 1) cam.anim = requestAnimationFrame(step);
+      else { cam.anim = 0; if (done) done(); }
+    }
+    cam.anim = requestAnimationFrame(step);
+  }
+  function cancelGlide() { if (cam.anim) cancelAnimationFrame(cam.anim); cam.anim = 0; }
+
+  /** The page's real sections, top to bottom: tall, wide blocks (header, sections, footer, anything with an id). */
+  function sections() {
+    var all = document.querySelectorAll('header,nav,main>*,section,article,footer,[id]');
+    var vh = window.innerHeight, vw = window.innerWidth, list = [];
+    for (var i = 0; i < all.length; i++) {
+      var r = all[i].getBoundingClientRect();
+      if (r.height < Math.min(140, vh * 0.2) || r.width < vw * 0.4 || !visible(all[i])) continue;
+      list.push({ el: all[i], top: r.top + scrollY() });
+    }
+    list.sort(function (a, b) { return a.top - b.top; });
+    var out = [];
+    for (var j = 0; j < list.length; j++) if (!out.length || list[j].top - out[out.length - 1].top > 80) out.push(list[j]);
+    return out;
+  }
+
+  function nameOf(el) {
+    var t = el.tagName.toLowerCase();
+    var aria = el.getAttribute('aria-label') || '';
+    var raw = (aria.split(/\s+/).length <= 3 ? aria : '') || el.id || '';
+    if (!raw && el.className && typeof el.className === 'string') {
+      var c = el.className.split(/\s+/)[0] || '';
+      if (/^[a-z][a-z-]{2,}$/i.test(c) && !/^(container|wrap|wrapper|inner|row|col|grid|flex|section|block|content|js-)/i.test(c)) raw = c;
+    }
+    if (raw) {
+      raw = raw.replace(/[-_]+/g, ' ').replace(/\b(section|wrap|wrapper|container|inner|content|block)\b/gi, '').replace(/\s+/g, ' ').trim().toLowerCase();
+      if (/^(top|intro|banner|masthead|home|landing|splash)$/.test(raw)) raw = 'hero';
+      if (raw) return raw.slice(0, 30);
+    }
+    if (t === 'header') return 'header';
+    if (t === 'footer') return 'footer';
+    if (t === 'nav') return 'navigation';
+    var h = el.querySelector && el.querySelector('h1,h2,h3');
+    var txt = h ? (h.innerText || h.textContent || '').replace(/\s+/g, ' ').trim() : '';
+    return txt && txt.length <= 40 ? '“' + txt + '”' : '';
+  }
+
+  function tourStep() {
+    clearTimeout(cam.timer);
+    if (!cam.tour) return;
+    if (maxY() < window.innerHeight * 0.15) { post({ fd: 'camera', state: 'still' }); return; }
+    var list = sections(), y = scrollY(), next = null;
+    for (var i = 0; i < list.length; i++) if (list[i].top > y + 60 && list[i].top - window.innerHeight * 0.06 <= maxY() + 10) { next = list[i]; break; }
+    var to = next ? next.top - window.innerHeight * 0.06 : 0;
+    post({ fd: 'camera', state: 'tour', name: next ? nameOf(next.el) : 'top' });
+    glide(to, next ? 2200 : 3400, function () { if (cam.tour) cam.timer = setTimeout(tourStep, DWELL); });
+  }
+
+  function setTour(on) {
+    cam.tour = !!on;
+    clearTimeout(cam.timer);
+    if (on) cam.timer = setTimeout(tourStep, 2500); // a moment on the current view first
+    else cancelGlide();
+  }
+
+  function query(sel) {
+    try { return document.querySelectorAll(sel); } catch (e) { return []; }
+  }
+  function usesAsset(name) {
+    var out = [], all = document.querySelectorAll('img,source,image,use,object,embed,[style]');
+    for (var i = 0; i < all.length; i++) {
+      var a = all[i], u = (a.getAttribute('src') || a.getAttribute('srcset') || a.getAttribute('href') || a.getAttribute('xlink:href') || a.getAttribute('data') || a.getAttribute('style') || '');
+      if (u.indexOf(name) >= 0) out.push(a.tagName === 'SOURCE' ? a.parentElement : a);
+    }
+    if (!out.length) { // a CSS background
+      var els = document.querySelectorAll('body *');
+      for (var j = 0; j < els.length && j < 1500; j++) { var bg = window.getComputedStyle(els[j]).backgroundImage || ''; if (bg.indexOf(name) >= 0) out.push(els[j]); }
+    }
+    return out;
+  }
+
+  // Really part of the page, not parked off it (a skip link, an off-canvas menu).
+  function onPage(el) {
+    var r = el.getBoundingClientRect();
+    return r.bottom + scrollY() > 0 && r.right > 0 && r.left < window.innerWidth && r.width * r.height > 64;
+  }
+
+  /** The element a hint means, if it means one: a visible match, and not one of many (".btn" says nothing). */
+  function resolve(hints) {
+    for (var i = 0; i < (hints || []).length && i < 8; i++) {
+      var h = hints[i], found = h.asset ? usesAsset(String(h.asset)) : h.sel ? query(String(h.sel)) : [];
+      var vis = [];
+      for (var j = 0; j < found.length; j++) if (found[j] && visible(found[j]) && onPage(found[j])) vis.push(found[j]);
+      if (vis.length && vis.length <= 6) return vis[0];
+    }
+    return null;
+  }
+
+  /** Where to look for an element: its section, or itself when it is big enough to be one. */
+  function frameOf(el) {
+    if (el.getBoundingClientRect().height >= window.innerHeight * 0.35) return el;
+    var box = closestEl(el.parentElement, 'section,header,footer,nav,article,main>*');
+    if (box) return box;
+    for (var p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+      if (p.id && p.getBoundingClientRect().height >= window.innerHeight * 0.35) return p;
+    }
+    return el;
+  }
+
+  function focusOn(m) {
+    var el = resolve(m.hints);
+    if (!el) { post({ fd: 'camera', state: 'kept' }); return; }
+    setTour(false);
+    var box = frameOf(el), r = box.getBoundingClientRect(), vh = window.innerHeight;
+    var to = r.height < vh * 0.8 ? scrollY() + r.top - (vh - r.height) / 2 : scrollY() + r.top - vh * 0.06;
+    post({ fd: 'camera', state: 'follow', name: nameOf(box) || nameOf(el) });
+    glide(to, 1500, function () { if (m.highlight) highlight(el.getBoundingClientRect().height > 30 ? el : box); });
+  }
+
+  function highlight(el) {
+    if (!cam.hl) {
+      cam.hl = document.createElement('div');
+      cam.hl.style.cssText = 'position:fixed;z-index:2147483646;pointer-events:none;border:3px solid rgba(255,140,80,.95);border-radius:14px;' +
+        'box-shadow:0 0 0 4px rgba(255,106,61,.18),0 0 36px rgba(255,106,61,.45);transition:opacity .5s ease;opacity:0';
+      document.documentElement.appendChild(cam.hl);
+    }
+    cam.hlEl = el;
+    drawHighlight();
+    cam.hl.style.opacity = '1';
+    clearTimeout(cam.hlTimer);
+    cam.hlTimer = setTimeout(function () { if (cam.hl) cam.hl.style.opacity = '0'; cam.hlTimer = setTimeout(function () { cam.hlEl = null; }, 600); }, 2200);
+  }
+  function drawHighlight() {
+    if (!cam.hl || !cam.hlEl) return;
+    var r = cam.hlEl.getBoundingClientRect();
+    cam.hl.style.left = (r.left - 8) + 'px'; cam.hl.style.top = (Math.max(-8, r.top - 8)) + 'px';
+    cam.hl.style.width = (r.width + 10) + 'px'; cam.hl.style.height = (Math.min(r.height, window.innerHeight) + 10) + 'px';
+  }
+
+  // The viewer takes over: stop moving at once (the TV resumes after a quiet spell).
+  function viewerMoved() {
+    if (!cam.tour && !cam.anim) return;
+    setTour(false);
+    post({ fd: 'camera', state: 'paused' });
+  }
+  ['wheel', 'touchstart', 'mousedown', 'keydown'].forEach(function (t) { window.addEventListener(t, viewerMoved, { passive: true, capture: true }); });
+
   function command(m) {
     switch (m.op) {
-      case 'key': return act(m.action);
+      case 'key': viewerMoved(); return act(m.action);
+      case 'camera': return setTour(m.mode === 'tour');
+      case 'focus': return focusOn(m);
       case 'reload':
         saveScroll();
         return location.reload();
@@ -214,7 +386,7 @@
   // page never loses its styles, its scroll or its state. No same-origin sheets: the TV reloads the page instead.
   function swapStyles() {
     var links = document.querySelectorAll('link[rel~="stylesheet"]');
-    var n = 0;
+    var n = 0, pending = 0;
     for (var i = 0; i < links.length; i++) {
       var old = links[i];
       var u;
@@ -223,7 +395,11 @@
       u.searchParams.set('__fd', String(Date.now()));
       var fresh = old.cloneNode();
       fresh.href = u.toString();
-      fresh.onload = fresh.onerror = (function (o) { return function () { if (o.parentNode) o.parentNode.removeChild(o); }; })(old);
+      fresh.onload = fresh.onerror = (function (o) { return function () {
+        if (o.parentNode) o.parentNode.removeChild(o);
+        if (--pending === 0) setTimeout(function () { post({ fd: 'cssdone' }); }, 60); // the new styles have applied
+      }; })(old);
+      pending++;
       old.parentNode.insertBefore(fresh, old.nextSibling);
       n++;
     }
@@ -252,7 +428,7 @@
   });
   window.addEventListener('popstate', report);
   window.addEventListener('hashchange', report);
-  window.addEventListener('scroll', draw, true);
+  window.addEventListener('scroll', function () { draw(); drawHighlight(); }, true);
   window.addEventListener('resize', draw);
 
   window.addEventListener('error', function (e) {

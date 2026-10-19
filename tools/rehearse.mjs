@@ -76,6 +76,8 @@ const state = () => tv.evaluate(() => {
     code: q('.cp-status'),
     tests: p && p.tests ? (p.tests.state + (p.tests.total ? ` ${p.tests.passed}/${p.tests.total}` : '')) : null,
     codeEvents: (a.code[pid] || []).length,
+    cam: q('.pv-cam.on'),
+    scroll: (() => { try { const f = document.querySelector('iframe.pv-frame:not(.pv-next)'); return f ? Math.round(f.contentWindow.scrollY / 50) * 50 : null; } catch (e) { return 'x'; } })(),
     spoken: window.__spoken.length,
   };
 });
