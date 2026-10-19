@@ -20,7 +20,8 @@ export function humanize(command) {
   const c = String(command || '').trim().replace(/^(sudo|env \S+=\S+|cd \S+ &&)\s+/g, '');
   const words = c.split(/\s+/);
   const first = base(words[0]);
-  const arg = words.slice(1).map((w) => w.replace(/^['"]|['"]$/g, '')).filter((w) => w && !w.startsWith('-') && /^[\w.\/~@-]+$/.test(w)).pop();
+  // (A heredoc marker such as `python3 - <<'PY'` is not a file name.)
+  const arg = words.slice(1).map((w) => w.replace(/^<<-?|^['"]|['"]$/g, '').replace(/^['"]|['"]$/g, '')).filter((w) => w && !w.startsWith('-') && /^[\w.\/~@-]+$/.test(w) && !/^[A-Z]{1,5}$/.test(w)).pop();
   if (first === 'firedev') {
     const sub = words[1] || '';
     if (sub === 'say') return { verb: 'Talking', object: 'you through it', icon: 'spark', stage: null, soft: true };
@@ -55,7 +56,7 @@ export function humanize(command) {
   }
   if (/^(mkdir|touch|cp|mv|rm|apply_patch|patch|tee)$/.test(first) || first === 'sed') return { verb: 'Editing', object: arg ? base(arg) : 'files', icon: 'pencil', stage: 'build' };
   if (/^(curl|wget|http)$/.test(first)) return { verb: 'Checking', object: 'a web address', icon: 'globe', stage: 'verify' };
-  if (/^(node|python3?|deno|bun|ruby|go)$/.test(first)) return { verb: 'Running', object: arg ? base(arg) : first, icon: 'terminal', stage: 'verify' };
+  if (/^(node|python3?|deno|bun|ruby|go)$/.test(first)) return { verb: 'Running', object: arg ? base(arg) : 'a ' + first.replace(/3$/, '') + ' script', icon: 'terminal', stage: 'verify' };
   return { verb: 'Running', object: first || 'a command', icon: 'terminal', stage: 'explore' };
 }
 
@@ -85,6 +86,15 @@ export function describe(item) {
   }
 }
 
+/** The agent's latest reasoning headline ("Designing midnight theme") as the step between steps. */
+function thoughtNow(t) {
+  const th = t.thought;
+  if (!th || !th.text || Date.now() / 1000 - (th.ts || 0) > 120) return null;
+  const [first, ...rest] = th.text.split(' ');
+  if (/ing$/i.test(first) && rest.length) return { verb: first, object: rest.join(' '), icon: 'spark', thinking: true, thought: true };
+  return { verb: 'Working on', object: th.text.charAt(0).toLowerCase() + th.text.slice(1), icon: 'spark', thinking: true, thought: true };
+}
+
 function dirOf(path) {
   const parts = String(path || '').split('/');
   return parts.length > 1 ? parts.slice(0, -1).join('/') + '/' : '';
@@ -108,7 +118,7 @@ export function liveState(p) {
   // A finished step that isn't a command still running is history: between steps the agent is thinking.
   if (running && latest && latest.status !== 'running' && latest.kind !== 'file' && Date.now() / 1000 - (latest.ts || 0) > 6) now = null;
   if (waiting) now = { verb: 'Waiting', object: 'for your OK', icon: 'shield', tone: 'warn' };
-  if (running && !now) now = { verb: 'Thinking', object: items.length ? 'about the next step' : 'about your request', icon: 'spark', thinking: true };
+  if (running && !now) now = thoughtNow(t) || { verb: 'Thinking', object: items.length ? 'about the next step' : 'about your request', icon: 'spark', thinking: true };
   // Files: the newest change per path, joined with the diff's line counts.
   const byPath = {};
   const changes = {};
@@ -123,8 +133,11 @@ export function liveState(p) {
     return { ...f, added: c ? c.added : null, removed: c ? c.removed : null };
   });
   const said = (p.conversation || []).filter((c) => c.role === 'agent' && c.task === t.id).slice(-1)[0];
+  // How long nothing visible has happened (a step, a file, a headline): the truthful "still working" line.
+  const lastTs = Math.max(latest ? latest.ts || 0 : 0, t.thought ? t.thought.ts || 0 : 0, t.started || 0);
   return {
     task: t, running, waiting, items, files, now, said: said ? said.text : '',
+    quiet: running && lastTs ? Math.max(0, Math.round(Date.now() / 1000 - lastTs)) : 0,
     stage: reached, stages: STAGES,
     // The step on the "now" panel isn't repeated in the list under it.
     steps: items.slice(-6, now && latest && now.object === describe(latest).object ? -1 : undefined).slice(-5)

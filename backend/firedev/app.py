@@ -325,6 +325,7 @@ def create_app(config: Config, devices: DeviceStore) -> FastAPI:
                     else:
                         asyncio.create_task(_reply(websocket, client, {"id": msg.get("id"), "name": "voice_command",
                                                                          "args": {"text": msg.get("text", ""), "source": msg.get("source", client.role), "project": msg.get("project"),
+                                                                                  "rec_ms": msg.get("rec_ms"),
                                                                                   "ui": msg.get("ui") if isinstance(msg.get("ui"), dict) else None}}))
                 elif op == "ping":
                     await websocket.send_json({"type": "pong"})

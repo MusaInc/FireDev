@@ -38,11 +38,12 @@ itself or other projects.
 
 | # | Say | What happens by itself (no remote) | Rehearsal timing |
 |---|---|---|---|
-| 1 | *"Build a beautiful modern website for Aurora Lodge, a glass cabin retreat under the northern lights."* | The workspace opens with stages Understand → Explore → Build → Verify → Done. Codex says its plan aloud. Files appear in the list. Once the page **and its stylesheet** load, the TV switches to three panels: Codex's steps, the live site and LIVE CODE replaying each real edit. The checks run (14/14). | Task in 1.4 s; site on screen 2:15; done 3:15 |
-| 2 | *"Make it more dramatic. Switch the whole site to a dark midnight theme, with the northern lights glowing and slowly moving across the top, and a much bigger headline."* | The live site stays on screen from the first second. Each save reloads it (CSS changes swap in place, without a flash), and LIVE CODE types out the diff. | On screen in 0.8 s; done 1:25 |
+| 1 | *"Build a beautiful modern website for Aurora Lodge, a glass cabin retreat in Lapland. Keep it light and airy, like a snowy morning."* | The workspace opens with stages Understand → Explore → Build → Verify → Done. Codex says its plan aloud. Files appear in the list. Once the page **and its stylesheet** load, the TV switches to three panels: Codex's steps, the live site and LIVE CODE replaying each real edit. The checks run (14/14). | Task in 1.4 s; site on screen 2:15; done 3:15 |
+| 2 | *"Now give it a dramatic makeover. Switch to a dark midnight theme, with glowing northern lights moving across a full screen hero, a huge headline, and warm gold accents."* | The live site stays on screen from the first second. Each save reloads it (CSS changes swap in place, without a flash), and LIVE CODE types out the diff. | On screen in 0.8 s; done 1:25 |
 | 3 | *"Run the checks and walk me through what you built."* | Tests 14/14 in the left panel. Codex walks you through the page aloud. | 27 s |
 
-Agent timing varies between takes; the structure doesn't. Keep the camera rolling and cut the waits in the edit.
+A light first version makes the midnight makeover unmistakable: ask for both in this order. Agent timing varies
+between takes; the structure doesn't. Keep the camera rolling and cut the waits in the edit.
 
 ## Three-minute script and shot plan
 
@@ -119,3 +120,16 @@ Failures the rehearsals found, now fixed:
 8. **"Switch the whole site…" went to the wrong project.** In production, Web Lab answers to "site" and "website".
    Inside a project, a generic word now means the current project, unless it's said as something new ("build me
    a landing page"). Naming another project still switches.
+
+## Pacing (2026-10-19)
+
+- Every request is acknowledged by FireDev at once ("On it. Codex is starting now."), about 0.1 s after it's heard.
+  Codex's own first words follow 7–11 s later.
+- Between steps, the TV shows Codex's real reasoning headlines ("Designing animated aurora overlay"), not a generic
+  "Thinking". Headlines about its own reporting are left out. After 15 s with no new step, it says so ("No new step
+  for 20 s · still working").
+- Full-screen reveals: the page fills the TV for a few seconds when it first appears ("First look") and when Codex
+  finishes ("Done"). Any key ends one at once, and the live-code replay pauses during a reveal so no edit plays unseen.
+- Timings: each task records when it was heard, dispatched, Codex's first event, first file, first speech and
+  done. They're in the task snapshot and logged as `timings <project> <task>: …`.
+  The phone mic sends as soon as the words are final (at most 0.7 s after release) and reports how long recognition took.

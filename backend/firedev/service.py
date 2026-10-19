@@ -19,7 +19,7 @@ from .codefeed import CodeFeed
 from .config import Config
 from .events import Bus
 from .preview import PreviewManager
-from .session import ProjectSession, Task, _rid
+from .session import HEARD, ProjectSession, Task, _rid
 
 log = logging.getLogger("firedev.service")
 
@@ -57,6 +57,7 @@ COMMANDS = {
     "undo_changes", "get_changes", "get_file_diff", "get_output", "voice_command", "voice_link", "get_history", "reset_state",
     "ui_action", "ui_get", "ui_back", "get_data", "ui_show", "ui_patch",
     "preview_status", "preview_open", "preview_start", "preview_stop", "preview_view", "preview_report",
+    "speech_started",
 }
 READ_ONLY = {"list_projects", "get_project_status", "get_current_task", "get_build_status", "get_changes", "get_file_diff",
              "get_output", "get_history", "ui_get", "get_data", "preview_status"}
@@ -322,7 +323,7 @@ class FireDev:
                              prompt=text, mode=args.get("mode") or "change", source=args.get("source") or client.role, ui=args.get("ui")))
         busy = len(s.pending) > 1 or (s.current is not None and s.current is not task)
         return {"ok": True, "task": task.id, "queued": busy,
-                "message": (f"Queued for {s.adapter.display}." if busy else f"Asking {s.adapter.display}.")}
+                "message": (f"Queued for {s.adapter.display}." if busy else f"On it. {s.adapter.display} is starting now.")}
 
     async def _cmd_run_action(self, args, client):
         s = self.session(args.get("project"))
@@ -604,8 +605,21 @@ class FireDev:
     # --- voice ----------------------------------------------------------------------------------------------
 
     async def _cmd_voice_command(self, args, client):
-        return await self.voice(args.get("text", ""), client, source=args.get("source") or client.role, project=args.get("project"),
-                                ui=args.get("ui"))
+        rec = args.get("rec_ms")
+        token = HEARD.set({"t": time.time(), "rec_ms": int(rec) if isinstance(rec, (int, float)) and 0 <= rec < 60000 else None})
+        try:
+            return await self.voice(args.get("text", ""), client, source=args.get("source") or client.role, project=args.get("project"),
+                                    ui=args.get("ui"))
+        finally:
+            HEARD.reset(token)
+
+    async def _cmd_speech_started(self, args, client):
+        """The TV started saying something: when, after the line reached it. Marks the request's timings."""
+        s = self.sessions.get(args.get("project") or "")
+        t = s and (s._task(args.get("task")) if args.get("task") else s.current)
+        if t:
+            t.mark("ack_spoken" if args.get("kind") == "ack" else "tts_started")
+        return {"ok": True}
 
     def _context(self, pid: str | None) -> dict:
         if not pid or pid not in self.sessions:
@@ -617,7 +631,8 @@ class FireDev:
                 "pending_approval": any(a.project == pid for a in self.approvals.values()),
                 **self.previews.context(pid)}
 
-    async def voice(self, text: str, client: Client, source: str = "voice", project: str | None = None, ui: dict | None = None) -> dict:
+    async def voice(self, text: str, client: Client, source: str = "voice", project: str | None = None, ui: dict | None = None,
+                    quiet: bool = False) -> dict:
         pid = project or self.focus_project
         intent = intents.parse(text, [s.summary() for s in self.sessions.values()], self._context(pid))
         if not pid and (intent.args.get("any_project") or intent.name in _PROJECT_SCOPED):
@@ -638,9 +653,9 @@ class FireDev:
         self.bus.emit("voice_reply", pid, None, text=text, intent=intent.name, reply=reply, ok=result.get("ok", True),
                       navigate=result.get("navigate"), speech=result.get("speech"), listen=result.get("listen"),
                       client_action=result.get("client_action"))
-        # FireDev's own short answers are spoken too (as FireDev, not as the agent). Agent tasks are answered by the
-        # agent itself when its turn ends; only a queued one gets a word now so the user knows it was heard.
-        if reply and result.get("speak", True) and (intent.name != "send_agent_task" or result.get("queued") or not result.get("ok", True)):
+        # FireDev's own short answers are spoken too (as FireDev, not as the agent). An agent task gets a short word
+        # at once ("On it. Codex is starting now."): the agent's own first words take several seconds to arrive.
+        if reply and result.get("speak", True) and not quiet:  # quiet: a follow-up whose answer the caller speaks
             self.say(pid, reply)
         if reply and pid in self.sessions and intent.name != "send_agent_task":
             self.sessions[pid].add_turn("firedev", reply, kind="reply")
@@ -717,9 +732,9 @@ class FireDev:
             res["navigate"] = "workspace"
             if res.get("ok") and a.get("then"):
                 name = self.sessions[a["project"]].project.name
-                follow = await self.voice(a["then"], client, source, a["project"])
+                follow = await self.voice(a["then"], client, source, a["project"], quiet=True)
                 # Moving to another project is worth a word; the follow-up's own answer comes from the agent.
-                res["message"] = f"I'll do that in {name}." if a.get("routed") or follow.get("intent", {}).get("name") == "send_agent_task" \
+                res["message"] = f"On it, in {name}." if a.get("routed") or follow.get("intent", {}).get("name") == "send_agent_task" \
                     else f"{res['message']} {follow.get('message', '')}".strip()
                 res["navigate"] = follow.get("navigate") or "workspace"
             return res

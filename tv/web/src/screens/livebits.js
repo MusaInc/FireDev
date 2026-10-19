@@ -13,13 +13,16 @@ export function stageRail(reached, live, failed) {
 }
 
 /** The "now working on" panel: what the agent is doing, in words, with the file or thing it's doing it to. */
-export function nowPanel(now, compact) {
+export function nowPanel(now, compact, quiet) {
   if (!now) return h('div.now.idle');
+  // Nothing new for a while: say so plainly rather than inventing activity.
+  const still = quiet >= 15 ? h('div.now-quiet', null, 'No new step for ' + (quiet < 60 ? quiet + ' s' : Math.floor(quiet / 60) + ' min ' + (quiet % 60) + ' s') + ' · still working') : null;
   return h('div.now' + (compact ? '.compact' : '') + (now.thinking ? '.thinking' : '') + (now.tone ? '.tone-' + now.tone : ''), null,
     h('div.now-glyph', null, h('span.now-ring'), icon(now.icon || 'spark')),
     h('div.now-text', null,
       h('div.now-verb', null, now.verb),
       h('div.now-object.clip', null, now.object),
-      now.where ? h('div.now-where.mono.clip', null, now.where) : null),
+      now.where ? h('div.now-where.mono.clip', null, now.where) : null,
+      still),
     h('i.now-sweep'));
 }

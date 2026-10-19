@@ -20,7 +20,9 @@ A site a top design agency would be proud to ship: calm, confident, expensive-fe
 ## How it's built
 
 - Plain static files, no build step and no packages: `index.html`, `styles.css`, `script.js`, and `assets/` for SVGs.
-- Write `index.html` and `styles.css` early so the page can be shown while you work, then refine them.
+- The TV shows the page as soon as `index.html` and `styles.css` both load. Get a first styled version on screen within
+  your first few edits (a short stylesheet is fine), then refine it section by section in further saves: each save
+  appears on the TV.
 - Your code is replayed live on the TV as you write it, so keep it readable: normal formatting, one CSS declaration
   per line, short well-named sections. Never minify.
 - Every in-page link (`href="#..."`) must point to an element that exists.

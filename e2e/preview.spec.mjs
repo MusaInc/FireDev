@@ -184,6 +184,12 @@ test('a build goes live by itself in three columns: what the agent does, the rea
   await page.waitForFunction(() => window.__firedev.screen.ready && window.__firedev.screen.device.style.visibility === 'visible', null, { timeout: 30000 });
   const shown = () => page.locator('iframe.pv-frame:not(.pv-next)').contentFrame();
   await expect(shown().locator('h1')).toHaveText('Pulse');
+  // First look: the page takes the whole screen for a moment, labelled, then hands back to the columns.
+  await expect(page.locator('.preview-screen.pv-reveal .pv-reveal-label')).toContainText('First look', { timeout: 5000 });
+  await expect(page.locator('.code-panel')).toBeHidden();
+  await page.evaluate(() => { window.__reveals = []; setInterval(() => { const l = document.querySelector('.pv-reveal .pv-reveal-label');
+    const t = l && l.textContent; if (t && window.__reveals[window.__reveals.length - 1] !== t) window.__reveals.push(t); }, 150); });
+  await expect(page.locator('.preview-screen.pv-reveal')).toHaveCount(0, { timeout: 25000 });
   // Live code: a replay of the agent's real edit, labelled as one, typing the real lines.
   await expect(page.locator('.cp-status.replay .cp-chip')).toHaveText('Replay', { timeout: 20000 });
   await expect(page.locator('.cp-status.replay')).toContainText('Codex’s edit to');
@@ -196,6 +202,9 @@ test('a build goes live by itself in three columns: what the agent does, the rea
   await expect(shown().locator('.features')).toHaveText('Fast. Private. Beautiful.', { timeout: 40000 });
   // When the agent is done, nothing types: the panel says so.
   await page.waitForFunction(() => { const p = window.__firedev.projects.demo; return p && !p.task; }, null, { timeout: 60000 });
+  // Done: the finished page got the whole screen once more, and then the split came back.
+  await expect.poll(() => page.evaluate(() => window.__reveals.some((t) => t.startsWith('Done'))), { timeout: 15000 }).toBe(true);
+  await expect(page.locator('.preview-screen.pv-reveal')).toHaveCount(0, { timeout: 15000 });
   await expect(page.locator('.cp-status.done')).toBeVisible({ timeout: 20000 });
   await expect(page.locator('.code-panel.is-typing')).toHaveCount(0);
 });

@@ -54,7 +54,14 @@ export class CodePanel {
     if (!change || this.gone) return;
     this.queue.push({ ...change, ts: ts || Date.now() });
     while (this.queue.length > BACKLOG) this.queue.shift();
-    if (!this.playing) this.next();
+    if (!this.playing && !this.held) this.next();
+  }
+
+  /** Hidden for a moment (the page is shown full screen): typing pauses where it is, and nothing new starts, so no
+   *  replay plays out unseen. */
+  hold(on) {
+    this.held = !!on;
+    if (!on && !this.playing && this.queue.length) this.next();
   }
 
   /** What the agent is really doing right now, for when nothing is being replayed. */
@@ -149,6 +156,7 @@ export class CodePanel {
   tick() {
     this.raf = requestAnimationFrame((t) => {
       if (this.gone) return;
+      if (this.held) { this.last = 0; this.tick(); return; }
       const dt = this.last ? Math.min(0.1, (t - this.last) / 1000) : 1 / 60;
       this.last = t;
       // A little unevenness, like real typing bursts.

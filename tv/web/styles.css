@@ -317,6 +317,8 @@ body { font-family: "Outfit", system-ui, sans-serif; color: var(--text-1); -webk
 .now-verb { font-size: 24px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ember-1); }
 .now-object { margin-top: 4px; font-size: 58px; line-height: 1.12; font-weight: 600; letter-spacing: -0.02em; }
 .now-where { margin-top: 6px; font-size: 22px; color: var(--text-3); }
+.now-quiet { margin-top: 8px; font-size: 20px; color: var(--text-3); }
+.now.compact .now-quiet { font-size: 17px; margin-top: 4px; }
 .now-sweep { position: absolute; top: 0; bottom: 0; left: 0; width: 40%; pointer-events: none;
   background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.05), transparent); animation: sweep 3.2s ease-in-out infinite; }
 @keyframes sweep { from { transform: translateX(-120%); } to { transform: translateX(320%); } }
@@ -895,3 +897,16 @@ body { font-family: "Outfit", system-ui, sans-serif; color: var(--text-1); -webk
 .cp-tx .a { color: #ffc56b; }
 .cp-tx .p { color: #8fb8ff; }
 .cp-tx .f { color: #c9a7ff; }
+
+/* Reveals: the page edge to edge for a moment ("First look", "Done"), then back to the split. */
+.pv-reveal { padding: 0; }
+.pv-reveal .topbar, .pv-reveal .pv-toolbar, .pv-reveal .pv-agent, .pv-reveal .code-panel { display: none !important; }
+.pv-reveal .pv-main { margin: 0; }
+.pv-reveal .pv-box { width: 1920px !important; height: 1080px; border: 0; border-radius: 0; animation: reveal-in 700ms var(--ease); }
+.pv-reveal .pv-box.is-focused { box-shadow: none; }
+.pv-reveal-label { position: absolute; left: 48px; top: 40px; z-index: 4; display: none; align-items: center; gap: 16px; height: 68px; padding: 0 30px;
+  max-width: 1300px; border-radius: 999px; background: rgba(10, 10, 12, 0.86); border: 2px solid rgba(255, 140, 90, 0.5);
+  font-size: 30px; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pv-reveal .pv-reveal-label { display: flex; animation: fade-in 500ms var(--ease) 300ms both; }
+.pv-reveal-dot { width: 14px; height: 14px; border-radius: 50%; flex: none; background: var(--ember); }
+@keyframes reveal-in { from { opacity: 0.4; transform: scale(0.94); } to { opacity: 1; transform: none; } }

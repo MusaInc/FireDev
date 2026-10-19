@@ -111,3 +111,59 @@ def test_a_reply_right_after_the_agents_own_wrap_up_stays_quiet(tmp_path):
 def test_search_patterns_are_not_read_aloud():
     assert narration([], "Searching for “^(:root|\\.hero|”", playful=False) == "Now I'm searching the code."
     assert narration([], "Searching for “hero”", playful=False) == "Now I'm searching for “hero”."
+
+
+def test_reasoning_headlines_about_the_work_only():
+    from firedev.session import _thought_headline as head
+    assert head("**Designing animated aurora overlay**\n\nI'll add…") == "Designing animated aurora overlay"
+    assert head("**Considering progress update**") == ""
+    assert head("**Confirming speech step completion**") == ""
+    assert head("no headline here") == ""
+
+
+def test_task_timings_start_from_when_the_request_was_heard():
+    import time
+    from firedev.session import HEARD, Task
+    tok = HEARD.set({"t": time.time() - 0.5, "rec_ms": 420})
+    try:
+        t = Task(id="t1", title="Build", kind="agent")
+    finally:
+        HEARD.reset(tok)
+    t.mark("dispatched")
+    t.mark("dispatched", time.time() + 99)  # only the first time counts
+    tm = t.timings()
+    assert tm["recognition"] == 420 and tm["heard"] == 0 and 400 <= tm["dispatched"] <= 2000
+    assert list(tm)[:2] == ["recognition", "heard"]
+    assert Task(id="t2", title="x", kind="agent").timings()["queued"] == 0  # not spoken: from queuing
+
+
+async def test_an_agent_request_is_acknowledged_at_once(tmp_path):
+    from test_preview import make_service
+    from firedev.service import Client
+    svc, _ = make_service(tmp_path)
+    q = svc.bus.subscribe()
+    s = svc.sessions["web"]
+
+    async def ensure_open(sess):
+        return None
+    svc._ensure_open = ensure_open
+    s.adapter.id = "codex"
+    s.submit = lambda task: task
+    await svc.execute("voice_command", {"text": "Make the header smaller", "project": "web", "rec_ms": 300}, Client("tv", "TV", "tv"))
+    said = []
+    while not q.empty():
+        ev = q.get_nowait()
+        if ev.type == "agent_speech":
+            said.append(ev.data["text"])
+    assert said and said[0].startswith("On it.")
+
+
+def test_words_before_the_last_step_are_not_a_wrap_up(tmp_path):
+    """Codex says what it's about to do, then runs the checks: its closing answer (the tour) must still be spoken."""
+    import time
+    from test_preview import make_service
+    svc, _ = make_service(tmp_path)
+    s = svc.sessions["web"]
+    s._agent_spoke = (time.time() - 5, "t1")
+    s.add_activity("tests", "Tests: 14 / 14 passed", task="t1")
+    assert not s._just_said("All 14 checks passed. Here's the tour: the night sky up top, the cabins below.", "t1")

@@ -9,6 +9,7 @@ FireDev follows the log from where it left off and turns it into structured even
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import posixpath
@@ -28,6 +29,10 @@ from .agents.base import BRIEF_VERSION
 from .speech import clean_for_speech, narration, spoken_text
 from .config import Action, Project
 from .ssh import RemoteError, make_remote
+
+# Set while a spoken request is handled: {"t": when FireDev heard it, "rec_ms": how long the phone's recogniser took}.
+# Tasks created meanwhile start their timings from it.
+HEARD: contextvars.ContextVar[dict | None] = contextvars.ContextVar("heard", default=None)
 
 if TYPE_CHECKING:
     from .service import FireDev
@@ -108,6 +113,29 @@ class Task:
     lane: str = "main"
     ui: dict | None = None  # what the TV showed when the request was made: {surface, version, focused}
     spoke: bool = False  # the agent has already said something out loud during this task
+    marks: dict = field(default_factory=dict)  # when each step of the request happened (see timings())
+    thought: dict | None = None  # the agent's latest reasoning headline: {text, ts}
+
+    def __post_init__(self) -> None:
+        heard = HEARD.get()
+        if heard and time.time() - heard["t"] < 30:
+            self.marks["heard"] = heard["t"]
+            if heard.get("rec_ms") is not None:
+                self.marks["rec_ms"] = heard["rec_ms"]
+        self.marks.setdefault("queued", self.created)
+
+    def mark(self, name: str, at: float | None = None) -> None:
+        """The first time something happened in this task (later ones are ignored)."""
+        self.marks.setdefault(name, at or time.time())
+
+    def timings(self) -> dict:
+        """Milliseconds from hearing the request (or queuing the task) to each step, in order. rec_ms is the phone's
+        speech recognition before that: from letting go of the mic to sending the words."""
+        base = self.marks.get("heard") or self.marks.get("queued") or self.created
+        out = {k: round((v - base) * 1000) for k, v in sorted(self.marks.items(), key=lambda kv: kv[1]) if k != "rec_ms"}
+        if "rec_ms" in self.marks:
+            out = {"recognition": self.marks["rec_ms"], **out}
+        return out
 
     def to_dict(self) -> dict:
         return {
@@ -116,7 +144,21 @@ class Task:
             "summary": self.summary, "error": self.error, "status_text": self.status_text, "plan": self.plan,
             "files": [{"path": p, "change": c} for p, c in self.files.items()], "action": self.action_id, "lane": self.lane,
             "elapsed": round((self.finished or time.time()) - self.started, 1) if self.started else 0,
+            "timings": self.timings(),
+            "thought": self.thought,
         }
+
+
+def _thought_headline(text: str) -> str:
+    """'**Planning hero layout**\n\nI need to…' -> 'Planning hero layout'. Empty unless there's a short headline."""
+    m = re.match(r"\s*\*\*([^*\n]{3,60})\*\*", text)
+    head = m.group(1).strip().rstrip(".:") if m else ""
+    # About its own reporting ("Considering progress update", "Confirming speech step"), not the work: not worth showing.
+    return "" if _META_THOUGHT.search(head) else head
+
+
+_META_THOUGHT = re.compile(r"(?i)\b(progress|update to the user|speech|speak|say|said|narrat\w*|summary|summar\w*|firedev|"
+                           r"user|message|respon\w*|reply|final answer|demo|screenshot|skills?)\b")
 
 
 class ProjectSession:
@@ -182,6 +224,9 @@ class ProjectSession:
                      ref: str | None = None, task: str | None = None) -> dict:
         item = {"id": _rid("a"), "ts": time.time(), "kind": kind, "title": title, "detail": detail, "level": level,
                 "status": status, "ref": ref, "task": task, "has_output": bool(ref)}
+        t = self._task(task) if task and kind in ("file", "command", "tests") else None
+        if t:
+            t.mark({"file": "first_file", "command": "first_command", "tests": "first_tests"}[kind])
         self.activity.append(item)
         self.service.state_changed(self.project.id)
         return item
@@ -217,6 +262,9 @@ class ProjectSession:
             if now - last_ts < PROGRESS_GAP:
                 return False
         self._last_speech = (now, text)
+        t = self._task(task_id) if task_id else None
+        if t:
+            t.mark("first_speech")
         self._said.append((now, task_id, text))
         del self._said[:-6]
         self.bus.emit("agent_speech", self.project.id, task_id, id=_rid("s"), text=text, kind=kind, agent=self.adapter.display)
@@ -583,6 +631,8 @@ class ProjectSession:
     def _on_agent_event(self, run: Run, task: Task | None, ev: dict) -> None:
         k = ev["kind"]
         tid = task.id if task else None
+        if task:
+            task.mark("first_event")
         if run.lane == "ui":
             self._on_presenter_event(run, task, ev)
             return
@@ -596,13 +646,19 @@ class ProjectSession:
             text = ev["text"].strip()
             if task:
                 task.summary = text
+                task.mark("first_message")
             run.messages += 1
             self.add_activity("agent", text.split("\n")[0][:160], detail=text, task=tid)
             self.emit("agent_message", tid, text=text, agent=self.adapter.display)
             if run.messages == 1 and task and not task.spoke:
                 self._spawn(self._maybe_acknowledge(run, task, text))
         elif k == "thinking":
-            self.set_status("Thinking…")
+            # Codex's reasoning summaries start with a short headline ("**Designing the midnight theme**"): the truest
+            # status there is for the time between steps.
+            head = _thought_headline(ev.get("text") or "")
+            if task and head:
+                task.thought = {"text": head, "ts": time.time()}
+            self.set_status(head + "…" if head else "Thinking…")
         elif k == "plan":
             if task:
                 task.plan = ev["items"]
@@ -839,6 +895,7 @@ class ProjectSession:
                 continue
             self.ui_current = task
             task.status, task.started = "running", time.time()
+            task.mark("started", task.started)
             task.status_text = "Building the screen…"
             self.emit("task_started", task.id, task=task.to_dict())
             try:
@@ -876,6 +933,7 @@ class ProjectSession:
                 continue
             self.current = task
             task.status, task.started = "running", time.time()
+            task.mark("started", task.started)
             self.add_activity("task", task.title, detail=task.text, task=task.id, status="running")
             self.emit("task_started", task.id, task=task.to_dict())
             try:
@@ -887,6 +945,9 @@ class ProjectSession:
                 log.exception("task %s crashed", task.id)
                 task.status, task.error = "failed", str(e)
             task.finished = time.time()
+            task.mark("done", task.finished)
+            if task.kind == "agent":
+                log.info("timings %s %s: %s", self.project.id, task.id, " ".join(f"{k}={v}" for k, v in task.timings().items()))
             if task.cancelled:
                 task.status = "cancelled"
             self.current = None
@@ -906,8 +967,9 @@ class ProjectSession:
         """The agent already said this a moment ago (`firedev say` with its summary), or its own words just wrapped
         the task up: don't say it twice."""
         ts, tid = self._agent_spoke
-        if tid == task_id and time.time() - ts < WRAP_UP_WINDOW:
-            return True
+        if tid == task_id and time.time() - ts < WRAP_UP_WINDOW and not any(
+                a.get("task") == task_id and a["ts"] > ts and a["kind"] in ("command", "file", "tests", "build") for a in self.activity):
+            return True  # its last word came after its last step: that was the wrap-up
         words = lambda t: {w for w in re.findall(r"[a-z0-9]+", t.lower()) if len(w) > 3}
         new = words(text)
         for ts, tid, old in self._said:
@@ -967,6 +1029,7 @@ class ProjectSession:
         command = self.adapter.turn_command(prompt_file, self.agent_state["thread_id"], self.path, self.remote.home)
         self.last_agent_task = task
         run = await self.start_run(kind="agent", title=task.title, command=command, level=1, source=task.source, task=task)
+        task.mark("dispatched")
         if first or update:
             self.agent_state["brief"] = BRIEF_VERSION
         self._spawn(self._narrate(run, task))

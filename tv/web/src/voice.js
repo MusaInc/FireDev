@@ -61,7 +61,7 @@ export function createVoice(app) {
       spokenIds[d.id] = 1;
       spokenOrder.push(d.id);
       if (spokenOrder.length > 300) delete spokenIds[spokenOrder.shift()];
-      const item = { id: d.id, text: d.text, kind: d.kind || 'reply', who: d.agent || 'FireDev' };
+      const item = { id: d.id, text: d.text, kind: d.kind || 'reply', who: d.agent || 'FireDev', project: ev.project, task: ev.task, at: Date.now() };
       if (item.kind === 'reply' || item.kind === 'firedev') v.awaiting = false;
       if (item.kind === 'approval') v.queue.unshift(item);
       else v.queue.push(item);
@@ -84,7 +84,15 @@ export function createVoice(app) {
     },
 
     onTts(e) {
-      if (e.phase === 'start') return;
+      if (e.phase === 'start') {
+        // For the request's timings: when the TV really started talking (FireDev's own line is the acknowledgement).
+        const cur = v.speaking;
+        if (cur && cur.id === e.id && cur.project && !cur.reported) {
+          cur.reported = true;
+          app.link.command('speech_started', { project: cur.project, task: cur.task || null, kind: cur.kind === 'firedev' ? 'ack' : cur.kind, queued_ms: Date.now() - cur.at });
+        }
+        return;
+      }
       v.finished(e.id, e.phase);
     },
 

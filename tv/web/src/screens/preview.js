@@ -49,8 +49,9 @@ export class PreviewScreen {
     this.agent = focusable(h('div.card.pv-agent'), 'agent', { select: () => this.close() });
     this.statusEl = h('div.pv-status');
     this.banner = h('div.pv-banner');
+    this.revealEl = h('div.pv-reveal-label');
     this.device = h('div.pv-device');
-    this.box = focusable(h('div.pv-box', null, this.device, this.statusEl, this.banner,
+    this.box = focusable(h('div.pv-box', null, this.device, this.statusEl, this.banner, this.revealEl,
       h('div.pv-fullhint', null, 'OK: use the page  ·  ↓ Controls  ·  ◁ Split screen')), 'frame', {
       select: () => this.interact(!this.interacting),
     });
@@ -79,6 +80,7 @@ export class PreviewScreen {
       h('div.pv-main', null, this.agent, this.box, this.code.el),
       this.toolbar, this.sink);
     this.onBlur = () => setTimeout(() => this.reclaim(), 0);
+    this.ticker = setInterval(() => { if (!this.gone) this.update(); }, 5000); // the quiet line moves on by itself
     window.addEventListener('blur', this.onBlur);
     this.applyPrefs(true);
     // Opened mid-build: replay what the agent just wrote (labelled with how long ago), newest last.
@@ -305,6 +307,58 @@ export class PreviewScreen {
     this.update();
   }
 
+  // --- reveals --------------------------------------------------------------------------------------------------
+
+  /** The page edge to edge for a moment ("First look", "Done"), then back to the split. Not a preference: any key
+   *  ends it, and it never starts while the remote is in use. */
+  reveal(label, ms) {
+    if (this.gone || this.interacting || this.prefs.layout === 'full') return;
+    if (this.app.director && this.app.director.handsOn()) return; // someone is driving: don't take the screen away
+    this.revealing = { label };
+    this.code.hold(true);
+    this.el.classList.add('pv-reveal');
+    clear(this.revealEl).append(h('span.pv-reveal-dot'), h('span', null, label));
+    clearTimeout(this.revealTimer);
+    this.revealTimer = setTimeout(() => this.endReveal(), ms);
+    this.layout();
+    this.update();
+  }
+
+  endReveal() {
+    if (!this.revealing) return;
+    this.revealing = null;
+    this.code.hold(false);
+    clearTimeout(this.revealTimer);
+    this.el.classList.remove('pv-reveal');
+    this.sigs = {};
+    this.layout();
+    this.update();
+  }
+
+  /** Milestones worth the whole screen: the page's first appearance in a build, and the agent finishing. */
+  watchMilestones(p) {
+    const t = p.task || p.last_task;
+    const drawn = this.ready && this.content !== 0 && !!this.frame;
+    if (drawn && !this.firstLook && t && t.kind === 'agent' && (t.status === 'running' || t.status === 'queued')) {
+      this.firstLook = true;
+      setTimeout(() => {
+        this.reveal('First look · ' + (this.title || p.name), 7500);
+        // Said only if it can be said now, while the page is on show: late, it would be noise.
+        const v = this.app.voice;
+        if (this.revealing && v && !v.speaking && !v.queue.length) v.sayLocal('Here’s the first look.');
+      }, 900);
+    }
+    if (drawn) this.firstLook = true;
+    if (t && t.kind === 'agent' && t.lane !== 'ui') {
+      const was = this.lastTaskState;
+      this.lastTaskState = t.id + ':' + t.status;
+      if (was && was !== this.lastTaskState && was.split(':')[0] === t.id && t.status === 'completed') {
+        // After the last reload has had a moment to land.
+        setTimeout(() => this.reveal('Done · ' + t.title, 9000), 2200);
+      }
+    }
+  }
+
   // --- remote ----------------------------------------------------------------------------------------------
 
   interact(on) {
@@ -316,6 +370,7 @@ export class PreviewScreen {
   }
 
   key(action, down) {
+    if (this.revealing && down) { this.endReveal(); return action === 'back' || action === 'select'; }
     if (!down) return action === 'select' && this.interacting;
     const onFrame = this.app.focus.focusedId() === 'frame';
     if (this.interacting) {
@@ -341,7 +396,7 @@ export class PreviewScreen {
 
   /** Three columns (agent, page, code) while there's code to show or the agent is building; two otherwise. */
   codeVisible() {
-    if (this.prefs.layout === 'full') return false;
+    if (this.prefs.layout === 'full' || this.revealing) return false;
     const p = this.app.project(this.pid);
     const t = p && (p.task || p.last_task);
     return !!((this.app.code[this.pid] || []).length || (t && t.kind === 'agent' && (t.status === 'running' || t.status === 'queued')));
@@ -350,6 +405,8 @@ export class PreviewScreen {
   unmount() {
     this.code.destroy();
     this.gone = true;
+    clearInterval(this.ticker);
+    clearTimeout(this.revealTimer);
     window.removeEventListener('blur', this.onBlur);
     clearTimeout(this.flashTimer);
     clearTimeout(this.navTimer);
@@ -420,7 +477,7 @@ export class PreviewScreen {
 
   /** Sizes the page's frame: a real CSS viewport (desktop, tablet, mobile) scaled to fit the box. */
   layout() {
-    const full = this.prefs.layout === 'full';
+    const full = this.prefs.layout === 'full' || !!this.revealing;
     const three = this.codeVisible();
     this.el.classList.toggle('pv-3col', three);
     this.code.el.style.display = three ? '' : 'none';
@@ -492,6 +549,7 @@ export class PreviewScreen {
     if (this.codeVisible() !== this.el.classList.contains('pv-3col')) this.layout();
     this.renderStatus(st, p);
     this.renderBanner();
+    this.watchMilestones(p);
   }
 
   renderBanner() {
@@ -504,11 +562,12 @@ export class PreviewScreen {
   }
 
   renderAgent(p) {
-    if (this.prefs.layout === 'full') return;
+    if (this.prefs.layout === 'full' || this.revealing) return;
     const t = p.task || p.last_task;
     const live = liveState(p);
     const said = (p.conversation || []).filter((c) => c.role === 'agent').slice(-1)[0];
-    if (!this.changed('agent', [t && t.id, t && t.status, live && [live.now, live.stage, live.said, live.steps.map((s) => [s.id, s.status])], said && said.id, p.agent && p.agent.state])) return;
+    const quiet = live && live.quiet >= 15 ? live.quiet - (live.quiet % 5) : 0;
+    if (!this.changed('agent', [t && t.id, t && t.status, live && [live.now, live.stage, live.said, live.steps.map((s) => [s.id, s.status])], said && said.id, p.agent && p.agent.state, quiet])) return;
     const c = clear(this.agent);
     const running = live && (live.running || live.waiting);
     c.classList.toggle('is-live', !!running);
@@ -522,7 +581,7 @@ export class PreviewScreen {
         h('div.pv-agent-title.clamp2', null, t.title),
         h('div.pv-rail', null, h('div.pv-rail-track', null, h('i', { style: 'width:' + pct + '%' })),
           h('div.pv-rail-label', null, STAGES[live.stage].label + '  ·  ' + (live.stage + 1) + ' of ' + STAGES.length)));
-      if (running) c.append(h('div.pv-now', null, nowPanel(live.now, true)));
+      if (running) c.append(h('div.pv-now', null, nowPanel(live.now, true, quiet)));
       if (running && live.said) c.append(h('div.pv-quote.clamp3', null, '“' + live.said + '”'));
       const steps = live.steps.slice(running ? -3 : -4);
       if (steps.length) c.append(h('div.pv-steps', null, steps.map((s) => h('div.pv-step', null,

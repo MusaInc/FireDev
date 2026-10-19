@@ -46,12 +46,15 @@ export class WorkspaceScreen {
     this.sigs = {};
     this.seen = new Set(); // step ids already shown, so only new ones animate in
     this.clock = null; // { el, elapsed, at } for the running task's timer
+    this.ticks = 0;
     this.timer = setInterval(() => this.tick(), 1000);
   }
 
   unmount() { clearInterval(this.timer); }
 
   tick() {
+    // Every few seconds: the "no new step for …" line moves on even when no event arrives.
+    if (++this.ticks % 5 === 0) this.update();
     const c = this.clock;
     if (c && c.el.isConnected) c.el.textContent = clockText(c.elapsed + (Date.now() - c.at) / 1000);
   }
@@ -184,7 +187,8 @@ export class WorkspaceScreen {
         h('span.timer-pill', null, icon('clock'), v.timer));
     }
     if (set('title', t.title)) clear(v.title).append(t.title);
-    if (set('now', live.now)) clear(v.now).append(nowPanel(live.now));
+    const quiet = live.quiet >= 15 ? live.quiet - (live.quiet % 5) : 0;
+    if (set('now', [live.now, quiet])) clear(v.now).append(nowPanel(live.now, false, quiet));
     const said = live.said || (live.waiting ? 'Waiting for your approval' : t.status_text);
     if (set('said', said)) {
       clear(v.said).append(live.said ? h('span.quote', null, said) : h('span.dim', null, said || ''));

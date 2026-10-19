@@ -121,6 +121,10 @@ for (const [i, step] of script.entries()) {
   }
   const st = await state();
   rec.end = st;
+  // FireDev's own timings for the request: heard → dispatched → Codex's first event → first file → … (ms).
+  rec.timings = await tv.evaluate(() => { const a = window.__firedev, p = a.projects[a.route.project || a.focusProject];
+    const t = p && (p.task || p.last_task); return t ? t.timings : null; });
+  log('  timings: ' + JSON.stringify(rec.timings));
   fs.writeFileSync(`${out}/timeline.txt`, timeline.join('\n') + '\n');
   rec.seconds = Math.round((sec() - at) * 10) / 10;
   rec.shots.push(await shot(`s${i + 1}-end`));

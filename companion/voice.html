@@ -141,13 +141,13 @@
   function reply(text, ok) { $('reply').textContent = text || ''; $('reply').className = 'reply' + (ok === false ? ' bad' : ''); }
 
   var seq = 0;
-  function send(text) {
+  function send(text, recMs) {
     text = (text || '').trim();
     if (!text) return;
     $('heard').textContent = '“' + text + '”';
     reply('');
     if (mode === 'alexa') return alexa(text);
-    ws && ws.readyState === 1 && ws.send(JSON.stringify({ op: 'voice', phase: 'final', text: text, source: 'voice', id: ++seq }));
+    ws && ws.readyState === 1 && ws.send(JSON.stringify({ op: 'voice', phase: 'final', text: text, source: 'voice', id: ++seq, rec_ms: recMs }));
   }
 
   function phase(p, text) { ws && ws.readyState === 1 && ws.send(JSON.stringify({ op: 'voice', phase: p, text: text || '', source: mode === 'alexa' ? 'alexa' : 'voice' })); }
@@ -186,17 +186,19 @@
 
   // Hold-to-talk with the browser's speech recognition (Chrome/Safari on HTTPS).
   var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  var rec = null, finalText = '', holding = false;
+  var rec = null, finalText = '', interimText = '', holding = false;
   if (!SR || !window.isSecureContext) {
     $('mic').disabled = true;
     $('hint').textContent = window.isSecureContext ? 'Speech recognition isn’t available in this browser: type or use your keyboard’s mic.' : 'Talking needs HTTPS: type below, or use your keyboard’s mic.';
   } else {
     var start = function (e) {
       e.preventDefault(); if (holding) return; holding = true; finalText = '';
+      interimText = '';
       rec = new SR(); rec.lang = navigator.language || 'en-GB'; rec.interimResults = true; rec.continuous = true;
       rec.onresult = function (ev) {
         var interim = ''; finalText = '';
         for (var i = 0; i < ev.results.length; i++) { if (ev.results[i].isFinal) finalText += ev.results[i][0].transcript; else interim += ev.results[i][0].transcript; }
+        interimText = interim;
         var shown = (finalText + ' ' + interim).trim();
         $('heard').innerHTML = '<span class="partial">“' + shown.replace(/</g, '&lt;') + '”</span>';
         phase('partial', shown);
@@ -206,7 +208,19 @@
     };
     var stop = function () {
       if (!holding) return; holding = false; $('mic').classList.remove('on'); $('hint').textContent = 'Hold to talk';
-      if (rec) { rec.onend = function () { var t = finalText.trim() || ($('heard').textContent || '').replace(/[“”]/g, '').trim(); if (t) send(t); else phase('cancel'); }; rec.stop(); }
+      if (!rec) return;
+      // Send as soon as the words are settled: at once if everything heard is already final, otherwise when the
+      // recogniser finishes, but never more than 700 ms after letting go (then with the best words so far).
+      var released = Date.now(), sent = false;
+      var finish = function () {
+        if (sent) return; sent = true; clearTimeout(cap);
+        var t = (finalText + ' ' + interimText).trim() || ($('heard').textContent || '').replace(/[“”]/g, '').trim();
+        if (t) send(t, Date.now() - released); else phase('cancel');
+      };
+      var cap = setTimeout(finish, 700);
+      rec.onend = finish;
+      if (finalText.trim() && !interimText.trim()) finish();
+      rec.stop();
     };
     $('mic').addEventListener('pointerdown', start); $('mic').addEventListener('pointerup', stop); $('mic').addEventListener('pointerleave', stop); $('mic').addEventListener('pointercancel', stop);
   }

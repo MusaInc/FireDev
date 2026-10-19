@@ -29,6 +29,10 @@ class CodexAdapter(AgentAdapter):
         effort = effort or self.options.get("reasoning_effort")
         if effort:
             cfg += ["-c", f'model_reasoning_effort="{effort}"']
+        # Short reasoning headlines ("Designing the midnight theme") are what the TV shows between steps.
+        summary = self.options.get("reasoning_summary", "concise")
+        if summary:
+            cfg += ["-c", f'model_reasoning_summary="{summary}"']
         args = [self.binary, "exec"]
         if thread_id and not ephemeral:
             args += ["resume", thread_id]

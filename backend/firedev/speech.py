@@ -84,7 +84,8 @@ GOOD_NEWS = ["Nice.", "Green across the board.", "Not bad for a TV."]
 
 
 # Housekeeping not worth saying out loud ("Now I'm running pwd").
-_CHORE = re.compile(r"Running (pwd|ls|cd|cat|echo|sed|head|tail|find|rg|grep|wc|which|date|true|stat|tree|nl|"
+_CHORE = re.compile(r"Running ([A-Z]{1,5}$|pwd|ls|cd|cat|echo|sed|head|tail|find|rg|grep|wc|which|date|true|stat|tree|nl|mkdir|touch|"
+                    r"chmod|cp|mv|printf|"
                     r"git (status|diff|log|show|rev-parse|ls-files))\b")
 
 
@@ -124,6 +125,6 @@ def narration(activity: list[dict], now: str = "", *, playful: bool = True, rng:
     step = re.sub(r"^Searching for .*[\\^$|()\[\]*+?{}].*$", "Searching the code", step)
     # The agent's own steps ("Editing script.js…"), not FireDev's ("Waiting to start", "Asking Codex…").
     if step and step.split(" ", 1)[0].endswith("ing") and not re.match(r"(Waiting|Asking|Reconnecting|Starting)\b", step) \
-            and not _CHORE.match(step):
+            and not _CHORE.match(step) and not re.match(r"Thinking\b", step):
         out = (out + " " + pick(NOW).format(x=step[0].lower() + step[1:])).strip()
     return clean_for_speech(out.replace("’", "'"))
