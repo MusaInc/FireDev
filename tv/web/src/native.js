@@ -41,6 +41,7 @@ export const native = {
   connectSsh(opts) { if (N && N.connectSsh) N.connectSsh(JSON.stringify(opts)); },
   trustHostKey(fp) { if (N && N.trustHostKey) N.trustHostKey(fp); },
   publicKey() { return N && N.publicKey ? N.publicKey() : null; },
+  publicKeyFingerprint() { return N && N.publicKeyFingerprint ? N.publicKeyFingerprint() : null; },
   pairCode(claim, nonce) { return N && N.pairCode ? N.pairCode(claim, nonce) : null; },
   paired() { if (N && N.paired) N.paired(); },
   forgetConnection() { if (N && N.forgetConnection) N.forgetConnection(); },

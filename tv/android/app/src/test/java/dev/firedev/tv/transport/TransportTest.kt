@@ -201,6 +201,21 @@ class TransportTest {
         try { link.ensure(); fail("must refuse") } catch (e: HostKeyMismatch) { assertTrue(e.message!!.contains("changed")) }
     }
 
+    @Test fun sshTellsAKeyRefusalFromAWrongUser() {
+        val pin = try { SshLink("127.0.0.1", sshPort, "nobody", key, null).ensure(); null } catch (e: UnknownHostKey) { e.fingerprint }
+        val other = TvKey.fromSeed(TvKey.newSeed())
+        try { SshLink("127.0.0.1", sshPort, System.getProperty("user.name"), other, pin).ensure(); fail("must refuse") } catch (e: KeyRefused) {
+            assertTrue(e.message!!.contains("authorized_keys"))
+        }
+        try { SshLink("127.0.0.1", sshPort, "Nobody-${System.nanoTime()}", key, pin).ensure(); fail("must refuse") } catch (e: KeyRefused) { }
+    }
+
+    @Test fun keyFingerprintIsWhatSshKeygenPrintsForThePublicLine() {
+        val line = File(dir, "tv.pub").apply { writeText(TvKey.publicLine(key, "firedev-tv-test") + "\n") }
+        val keygen = ProcessBuilder("ssh-keygen", "-lf", line.path).start().inputStream.bufferedReader().readText()
+        assertTrue(keygen, keygen.contains(TvKey.fingerprint(key) + " "))
+    }
+
     @Test fun aStandardSshdShowsItsEd25519Fingerprint() {
         // What the TV tells users to compare with: `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`.
         val pub = File("/etc/ssh/ssh_host_ed25519_key.pub")

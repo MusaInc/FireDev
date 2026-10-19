@@ -7,7 +7,9 @@ import android.security.keystore.KeyProperties
 import android.util.Base64
 import android.util.Log
 import dev.firedev.tv.transport.HostKeyMismatch
+import dev.firedev.tv.transport.KeyRefused
 import dev.firedev.tv.transport.NotInstalled
+import dev.firedev.tv.transport.PasswordRefused
 import dev.firedev.tv.transport.PinnedTls
 import dev.firedev.tv.transport.Profile
 import dev.firedev.tv.transport.SshLink
@@ -38,7 +40,7 @@ class Connection(private val prefs: SharedPreferences, private val emit: (JSONOb
         private set
     @Volatile var transport: Transport? = null
         private set
-    private var pendingSsh: JSONObject? = null
+    @Volatile private var pendingSsh: JSONObject? = null
     val key: KeyPair by lazy { TvKey.fromSeed(seed()) }
     val tvName: String = listOf(Build.MANUFACTURER, Build.MODEL).filter { !it.isNullOrBlank() }.distinct().joinToString(" ").ifBlank { "Fire TV" }
 
@@ -56,6 +58,8 @@ class Connection(private val prefs: SharedPreferences, private val emit: (JSONOb
         return JSONObject().put("server", t.server).put("previewBase", t.previewBase).put("token", p.token ?: JSONObject.NULL)
             .put("connection", p.publicJson())
     }
+
+    fun keyFingerprint(): String = TvKey.fingerprint(key)
 
     fun publicKey(): String = TvKey.publicLine(key, "firedev-tv-" + tvName.replace(Regex("[^A-Za-z0-9]+"), "-").lowercase())
 
@@ -79,58 +83,57 @@ class Connection(private val prefs: SharedPreferences, private val emit: (JSONOb
 
     // --- SSH ---------------------------------------------------------------------------------------------
 
-    /** j: {host, port, user, password?, hostKey?}. The password, if any, is used once to install the TV's key. */
+    /**
+     * j: {host, port, user, password?, hostKey?}. Always tries this TV's key first; the password, if any, is only
+     * used when the key is refused, once, to add the key to the user's authorized_keys. Then it's forgotten.
+     */
     fun connectSsh(j: JSONObject) = work.execute {
         val host = j.getString("host").trim()
         val port = j.optInt("port", 22)
         val user = j.getString("user").trim()
         val password = j.optString("password").ifBlank { null }
         try {
-            emit(state("connecting", "Connecting to $host…"))
-            val link = SshLink(host, port, user, key, j.optString("hostKey").ifBlank { null })
+            emit(state("connecting", "Logging in to $host as $user with this TV's key…"))
+            val pin = j.optString("hostKey").ifBlank { null } ?: prefs.getString(hostKeyPref(host, port), null)
+            val link = SshLink(host, port, user, key, pin)
             try {
-                link.ensure(password ?: return@execute connectWithKey(link, j))
+                link.ensure()
             } catch (e: UnknownHostKey) {
                 pendingSsh = j
                 emit(state("hostkey", "Check the server's fingerprint").put("fingerprint", e.fingerprint).put("host", host))
                 return@execute
+            } catch (e: KeyRefused) {
+                if (password == null) {
+                    emit(state("needs_key", e.message ?: "The server didn't accept this TV's key").put("publicKey", publicKey())
+                        .put("keyFingerprint", keyFingerprint()).put("host", host).put("user", user))
+                    return@execute
+                }
+                emit(state("connecting", "Adding this TV's key on $host…"))
+                SshSetup.installKey(link, publicKey(), password)
+                link.ensure()
             }
-            emit(state("connecting", "Adding this TV's key on $host…"))
-            SshSetup.installKey(link, publicKey(), password)
-            connectWithKey(link, j)
+            link.hostKeyPin?.let { prefs.edit().putString(hostKeyPref(host, port), it).apply() }
+            emit(state("connecting", "Starting FireDev on $host…"))
+            val server = try { SshSetup.bootstrap(link, tvName) } catch (e: NotInstalled) {
+                emit(state("not_installed", e.message ?: "FireDev isn't installed on the server").put("host", host)); link.close(); return@execute
+            }
+            link.close()
+            val p = Profile("ssh", server.name, host, port, user = user, hostKey = link.hostKeyPin,
+                apiPort = server.apiPort, remotePreviewPort = server.previewPort, token = server.token)
+            replace(p)
+            probe("/api/health")
+            emit(state("ready", "Connected to ${p.name}").put("token", server.token))
         } catch (e: HostKeyMismatch) {
             emit(state("error", e.message ?: "Host key changed").put("hostKeyChanged", true))
+        } catch (e: PasswordRefused) {
+            emit(state("error", e.message ?: "The server refused that password").put("passwordRefused", true))
         } catch (e: Exception) {
             emit(state("error", e.message ?: "Couldn't connect to $host"))
         }
     }
 
-    private fun connectWithKey(link: SshLink, j: JSONObject) {
-        try {
-            link.ensure()
-        } catch (e: UnknownHostKey) {
-            pendingSsh = j
-            emit(state("hostkey", "Check the server's fingerprint").put("fingerprint", e.fingerprint).put("host", link.host))
-            return
-        } catch (e: Exception) {
-            emit(state("needs_key", e.message ?: "The server didn't accept the TV's key").put("publicKey", publicKey())
-                .put("host", link.host).put("user", link.user))
-            return
-        }
-        emit(state("connecting", "Starting FireDev on ${link.host}…"))
-        val server = try { SshSetup.bootstrap(link, tvName) } catch (e: NotInstalled) {
-            emit(state("not_installed", e.message ?: "FireDev isn't installed on the server").put("host", link.host)); link.close(); return
-        }
-        link.close()
-        val p = Profile("ssh", server.name, link.host, link.port, user = link.user, hostKey = link.hostKeyPin,
-            apiPort = server.apiPort, remotePreviewPort = server.previewPort, token = server.token)
-        replace(p)
-        probe("/api/health")
-        emit(state("ready", "Connected to ${p.name}").put("token", server.token))
-    }
-
-    fun trustHostKey(fingerprint: String) {
-        val j = pendingSsh ?: return
+    fun trustHostKey(fingerprint: String) = work.execute {
+        val j = pendingSsh ?: return@execute
         pendingSsh = null
         connectSsh(JSONObject(j.toString()).put("hostKey", fingerprint))
     }
@@ -178,6 +181,8 @@ class Connection(private val prefs: SharedPreferences, private val emit: (JSONOb
             c.disconnect()
         }
     }
+
+    private fun hostKeyPref(host: String, port: Int) = "hostkey:${host.lowercase()}:$port"
 
     private fun state(s: String, message: String) = JSONObject().put("type", "connection").put("state", s).put("message", message)
 

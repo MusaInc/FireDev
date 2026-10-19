@@ -39,6 +39,13 @@ object TvKey {
         return "ssh-ed25519 ${b64(blob)} $comment"
     }
 
+    /** SHA256:… as `ssh-keygen -lf` prints it for the public line, so the user can find it in authorized_keys. */
+    fun fingerprint(pair: KeyPair): String {
+        val pub = (pair.public as EdDSAPublicKey).abyte
+        val blob = ByteArrayOutputStream().apply { sshString("ssh-ed25519".toByteArray()); sshString(pub) }.toByteArray()
+        return "SHA256:" + b64(MessageDigest.getInstance("SHA-256").digest(blob)).trimEnd('=')
+    }
+
     private fun ByteArrayOutputStream.sshString(b: ByteArray) {
         write(byteArrayOf((b.size ushr 24).toByte(), (b.size ushr 16).toByte(), (b.size ushr 8).toByte(), b.size.toByte()))
         write(b)
@@ -71,6 +78,12 @@ class HostKeyMismatch(val expected: String, val got: String) :
     Exception("The server's host key changed (expected $expected, got $got). If you didn't reinstall the server, someone may be intercepting the connection.")
 
 class UnknownHostKey(val fingerprint: String) : Exception("New server: confirm its host key $fingerprint")
+
+/** The server said no to the TV's key (not in authorized_keys for that user, or the user doesn't exist). */
+class KeyRefused(msg: String, cause: Throwable?) : Exception(msg, cause)
+
+/** The server said no to the password. */
+class PasswordRefused(msg: String, cause: Throwable?) : Exception(msg, cause)
 
 /**
  * The TV's SSH connection to the user's own server: host key pinned (confirmed by the user the first time), the TV's
@@ -113,8 +126,8 @@ class SshLink(val host: String, val port: Int, val user: String, private val key
             if (password != null) c.authPassword(user, password) else c.authPublickey(user, KeyPairWrapper(key))
         } catch (e: Exception) {
             runCatching { c.disconnect() }
-            throw Exception(if (password != null) "The server refused that password." else
-                "The server didn't accept the TV's key. Add it to ~/.ssh/authorized_keys for $user (the TV shows it).", e)
+            if (password != null) throw PasswordRefused("$host refused that password for \"$user\". Check the user name and password, or leave the password empty and add this TV's key yourself.", e)
+            throw KeyRefused("$host didn't accept this TV's key for \"$user\". Either the user name is wrong, or the key isn't in that user's ~/.ssh/authorized_keys yet.", e)
         }
         client = c
         return c

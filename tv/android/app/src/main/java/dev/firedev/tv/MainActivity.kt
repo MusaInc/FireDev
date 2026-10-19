@@ -190,6 +190,7 @@ class MainActivity : Activity() {
         @JavascriptInterface fun connectSsh(json: String) = connection.connectSsh(JSONObject(json))
         @JavascriptInterface fun trustHostKey(fingerprint: String) = connection.trustHostKey(fingerprint)
         @JavascriptInterface fun publicKey(): String = connection.publicKey()
+        @JavascriptInterface fun publicKeyFingerprint(): String = connection.keyFingerprint()
         @JavascriptInterface fun pairCode(claim: String, nonce: String): String? = connection.pairCode(claim, nonce)
         @JavascriptInterface fun paired() = connection.paired()
         @JavascriptInterface fun forgetConnection() = connection.forget()
