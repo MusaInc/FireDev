@@ -66,3 +66,9 @@ def test_narrator_speaks_after_a_quiet_spell_and_stops_with_the_run(monkeypatch)
     asyncio.run(go())
     assert "index.html" in said[0] and "editing script.js" in said[0]
     assert turns == said
+
+
+def test_written_shorthand_is_read_as_words():
+    from firedev.speech import clean_for_speech
+    said = clean_for_speech("Moved the nav, e.g. the header & footer -> layout.tsx, w/ new tests.")
+    assert said == "Moved the nav, for example, the header and footer to layout.tsx, with new tests."

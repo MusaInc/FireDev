@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.speech.tts.Voice
 import org.json.JSONObject
 import java.util.Locale
 
@@ -32,8 +33,12 @@ class SpeechOutput(context: Context, private val emit: (JSONObject) -> Unit) {
         if (ok) {
             val lang = Locale.getDefault()
             if (tts.isLanguageAvailable(lang) < TextToSpeech.LANG_AVAILABLE) tts.language = Locale.US else tts.language = lang
-            tts.setSpeechRate(1.06f)
-            tts.setPitch(1.08f) // a touch brighter: an upbeat build buddy, not a sat-nav
+            val voice = runCatching { naturalVoice(tts.voices.orEmpty(), tts.language ?: lang) }.getOrNull()
+            if (voice != null) runCatching { tts.voice = voice }
+            val natural = (voice?.quality ?: 0) >= Voice.QUALITY_HIGH
+            // Neural voices already sound warm and lose that when pitched; older ones need a little lift to not drone.
+            tts.setSpeechRate(if (natural) 1.0f else 1.05f)
+            tts.setPitch(if (natural) 1.0f else 1.06f)
         }
         val queued = synchronized(waiting) { ready = ok; waiting.toList().also { waiting.clear() } }
         queued.forEach { (id, text) -> speak(id, text) }
@@ -52,5 +57,14 @@ class SpeechOutput(context: Context, private val emit: (JSONObject) -> Unit) {
     fun destroy() = runCatching { tts.stop(); tts.shutdown() }
 
     private fun event(id: String, phase: String) = emit(JSONObject().put("type", "tts").put("phase", phase).put("id", id))
+
+    companion object {
+        /** The most natural installed voice for the language: highest quality, on the device (no network stalls
+         *  mid-sentence), the same accent when there is one, and never a voice whose data isn't downloaded. */
+        fun naturalVoice(voices: Collection<Voice>, want: Locale): Voice? = voices
+            .filter { it.locale.language == want.language }
+            .filterNot { TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED in it.features.orEmpty() }
+            .maxWithOrNull(compareBy<Voice>({ !it.isNetworkConnectionRequired }, { it.locale.country == want.country }, { it.quality }, { -it.latency }))
+    }
 
 }

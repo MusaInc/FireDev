@@ -13,6 +13,10 @@ import re
 
 MAX_SPOKEN = 320
 
+# Written shorthand that text-to-speech reads badly ("e g", "dash greater than").
+_SAY_AS = [(r"\be\.g\.,?", "for example,"), (r"\bi\.e\.,?", "that is,"), (r"\betc\.", "and so on."),
+           (r"\s*(?:->|→|=>)\s*", " to "), (r"\s+&\s+", " and "), (r"\bw/(?=\s)", "with")]
+
 
 def spoken_text(text: str | None, max_len: int = MAX_SPOKEN) -> str:
     if not text:
@@ -36,6 +40,8 @@ def clean_for_speech(text: str, max_len: int = MAX_SPOKEN) -> str:
     t = re.sub(r"https?://\S+", "a link", t)
     t = re.sub(r"`([^`]*)`", r"\1", t)
     t = re.sub(r"(?<![\w.])(?:~|\.{0,2})?/?(?:[\w.-]+/)+([\w.-]+)", lambda m: posixpath.basename(m.group(0)), t)
+    for pat, say in _SAY_AS:
+        t = re.sub(pat, say, t)
     t = re.sub(r"[*_#>]+", "", t)
     t = re.sub(r"\s+", " ", t).strip()
     if len(t) <= max_len:
