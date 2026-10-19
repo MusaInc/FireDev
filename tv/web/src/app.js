@@ -41,6 +41,7 @@ export function createApp() {
     projects: {},
     approvals: [],
     focusProject: null,
+    code: {}, // project -> recent code_change events [{data, ts}]
     heard: null, // the latest words from any microphone: { state: listening | understood | ready, text, at }
     route: { name: 'center' },
     screen: null,
@@ -260,6 +261,15 @@ export function createApp() {
       case 'agent_speech':
         app.voice.onSpeech(ev);
         break;
+      case 'code_change': {
+        // The real code behind each change, for the live code panel (kept briefly so a panel opened mid-build can
+        // replay what just happened).
+        const list = app.code[ev.project] || (app.code[ev.project] = []);
+        list.push({ data: d, ts: Date.now() });
+        if (list.length > 12) list.shift();
+        if (app.screen && app.screen.onCode && app.route.project === ev.project) app.screen.onCode(d, Date.now());
+        break;
+      }
       case 'command_output':
         if (app.route.name === 'surface' && app.screen.onOutput) app.screen.onOutput(ev);
         return;

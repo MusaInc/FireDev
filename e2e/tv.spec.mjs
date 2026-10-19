@@ -206,14 +206,14 @@ test('the live view tells the story: stages, what it is doing now, the files it 
   await expect(page.locator('.cmd-say')).toContainText('for “title”');
   await expect(page.locator('.files-live')).toContainText('No files touched yet');
   await expect(page.locator('.timer')).toHaveText(/^0:\d\d$/);
-  // The first web file goes live: the page takes the screen and the side panel carries the story on.
-  await expect.poll(() => route(page), { timeout: 20000 }).toBe('preview');
-  await expect(page.locator('.pv-agent .now-verb')).toHaveText(/Creating|Editing/);
-  await expect(page.locator('.pv-rail-label')).toContainText('Build');
-  await expect(page.locator('.pv-agent svg.bad')).toHaveCount(0);
-  // Done: Back returns to the workspace, every stage ticked, a receipt and the changes file by file.
+  // This setup has no preview gateway: FireDev never switches to a preview it can't show, the workspace tells the story.
+  await expect(page.locator('.now-verb')).toHaveText(/Creating|Editing/, { timeout: 20000 });
+  await expect(page.locator('.rail-node.current .rail-label')).toHaveText('Build');
+  await expect(page.locator('.files-live .file-row').first()).toContainText(/index\.html|styles\.css/);
+  await expect(page.locator('.feed-row svg.bad')).toHaveCount(0);
+  expect(await route(page)).toBe('workspace');
+  // Done: every stage ticked, a receipt and the changes file by file.
   await idle(page);
-  await press(page, 'Escape');
   expect(await route(page)).toBe('workspace');
   await expect(page.locator('.receipt')).toBeVisible();
   await expect(page.locator('.rail-node.done')).toHaveCount(5);

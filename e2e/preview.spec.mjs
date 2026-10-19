@@ -116,6 +116,48 @@ test('a saved file reloads the page (no hot reload on a static server)', async (
   await expect.poll(async () => { const f = frame(page); return f ? f.locator('#h').textContent().catch(() => '') : ''; }, { timeout: 20000 }).toBe('Version two');
 });
 
+test('updates never blank the page: HTML swaps in once loaded, CSS changes apply in place without a reload', async ({ page }) => {
+  await openWorkspace(page);
+  await app(page, (pid) => window.__firedev.preview.open(pid), PID);
+  await previewReady(page);
+  const shown = () => page.locator('iframe.pv-frame:not(.pv-next)').contentFrame();
+  const index = new URL('web/index.html', DIR);
+  const css = new URL('web/site.css', DIR);
+  fs.writeFileSync(css, '#h { color: rgb(10, 20, 30); }');
+  fs.writeFileSync(index, fs.readFileSync(index, 'utf8').replace('</head>', '<link rel="stylesheet" href="/site.css"></head>').replace(/Version \w+/, 'Version three'));
+  // While the new version loads, the old one stays on screen: sample visibility through the whole swap.
+  const samples = await app(page, () => new Promise((done) => {
+    const out = [];
+    const t = setInterval(() => {
+      const s = window.__firedev.screen;
+      out.push(s.device.style.visibility);
+      if (out.length > 60) { clearInterval(t); done(out); }
+    }, 50);
+  }));
+  expect(samples.every((v) => v === 'visible')).toBe(true);
+  await expect(shown().locator('#h')).toHaveText('Version three', { timeout: 20000 });
+  await expect(shown().locator('#h')).toHaveCSS('color', 'rgb(10, 20, 30)');
+  // A stylesheet-only save: the page keeps its state (a marker set in it survives) and picks up the new colour.
+  await shown().locator('body').evaluate(() => { window.__kept = 'still here'; });
+  fs.writeFileSync(css, '#h { color: rgb(200, 100, 50); }');
+  await expect(shown().locator('#h')).toHaveCSS('color', 'rgb(200, 100, 50)', { timeout: 20000 });
+  expect(await shown().locator('body').evaluate(() => window.__kept)).toBe('still here');
+  await expect(page.locator('.pv-chips')).toContainText('Updated');
+});
+
+test('an empty page is never put on screen: FireDev says so and shows it once something is drawn', async ({ page }) => {
+  await openWorkspace(page);
+  const index = new URL('web/index.html', DIR);
+  const original = fs.readFileSync(index, 'utf8');
+  fs.writeFileSync(index, '<!doctype html><meta charset=utf-8><title>Empty</title><body></body>');
+  await app(page, (pid) => window.__firedev.preview.open(pid), PID);
+  await page.waitForFunction(() => window.__firedev.screen.ready, null, { timeout: 45000 });
+  await expect(page.locator('.pv-status')).toContainText('nothing on it yet');
+  expect(await app(page, () => window.__firedev.screen.device.style.visibility)).toBe('hidden');
+  fs.writeFileSync(index, original);
+  await expect.poll(() => app(page, () => window.__firedev.screen.device.style.visibility), { timeout: 20000 }).toBe('visible');
+});
+
 test('a lost preview session recovers by itself with a fresh one-time address', async ({ page, context }) => {
   await openWorkspace(page);
   await app(page, (pid) => window.__firedev.preview.open(pid), PID);
@@ -125,6 +167,37 @@ test('a lost preview session recovers by itself with a fresh one-time address', 
   await page.waitForTimeout(800);
   await previewReady(page);
   await expect.poll(async () => { const f = frame(page); return f ? f.locator('#h').count().catch(() => 0) : 0; }, { timeout: 20000 }).toBe(1);
+});
+
+test('a build goes live by itself in three columns: what the agent does, the real page, and its real code replayed', async ({ page, request }) => {
+  test.setTimeout(120000);
+  await page.goto('/tv/?token=' + encodeURIComponent(tokens().tv));
+  await page.waitForFunction(() => window.__firedev && window.__firedev.everOnline);
+  expect(await route(page)).toBe('home');
+  // Spoken from the phone; nobody touches the remote from here on.
+  const r = await request.post('/api/command', { headers: { Authorization: 'Bearer ' + tokens().voice },
+    data: { name: 'voice_command', args: { text: 'Build a landing page DEMO', project: 'demo' } } });
+  expect((await r.json()).ok).toBe(true);
+  await expect.poll(() => route(page), { timeout: 45000 }).toBe('preview');
+  await expect(page.locator('.preview-screen.pv-3col')).toBeVisible();
+  // The page is only shown once it has really loaded and drawn something.
+  await page.waitForFunction(() => window.__firedev.screen.ready && window.__firedev.screen.device.style.visibility === 'visible', null, { timeout: 30000 });
+  const shown = () => page.locator('iframe.pv-frame:not(.pv-next)').contentFrame();
+  await expect(shown().locator('h1')).toHaveText('Pulse');
+  // Live code: a replay of the agent's real edit, labelled as one, typing the real lines.
+  await expect(page.locator('.cp-status.replay .cp-chip')).toHaveText('Replay', { timeout: 20000 });
+  await expect(page.locator('.cp-status.replay')).toContainText('Codex’s edit to');
+  await expect(page.locator('.code-panel .cp-row.typed').first()).toBeVisible();
+  const typed = await page.locator('.code-panel .cp-row.typed .cp-tx').allTextContents();
+  const real = ['<!doctype html>', '<title>Pulse</title>', '<h1>Pulse</h1>', '<p>Track every heartbeat of your app.</p>',
+    'body { font: 20px system-ui; }', 'h1 { font-size: 64px; }', '<section class="features">Fast. Private. Beautiful.</section>', 'fixed'];
+  for (const t of typed.map((x) => x.trim()).filter(Boolean)) expect(real.some((line) => line.startsWith(t))).toBe(true);
+  // The feature section the agent adds later appears in the same page, without leaving the live view.
+  await expect(shown().locator('.features')).toHaveText('Fast. Private. Beautiful.', { timeout: 40000 });
+  // When the agent is done, nothing types: the panel says so.
+  await page.waitForFunction(() => { const p = window.__firedev.projects.demo; return p && !p.task; }, null, { timeout: 60000 });
+  await expect(page.locator('.cp-status.done')).toBeVisible({ timeout: 20000 });
+  await expect(page.locator('.code-panel.is-typing')).toHaveCount(0);
 });
 
 test('the gateway refuses anyone without a ticket from a paired TV', async ({ request }) => {

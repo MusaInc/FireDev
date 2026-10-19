@@ -634,6 +634,7 @@ class ProjectSession:
             self.add_activity("file", f"{label} {posixpath.basename(rel)}", detail=rel, level=1, task=tid)
             self.emit("file_changed", tid, path=rel, change=ev.get("change", "update"))
             self._spawn(self.refresh_changes())
+            self._spawn(self.service.code.capture(self, tid, rel, ev.get("change", "update")))
         elif k == "error":
             if ev.get("transient"):
                 self.set_status("Reconnecting to the model…")

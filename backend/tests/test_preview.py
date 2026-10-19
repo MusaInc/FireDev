@@ -508,16 +508,19 @@ def test_preview_dataclass_snapshot():
 
 
 async def test_live_build_puts_the_page_on_the_tv_once_per_task(tmp_path, monkeypatch):
-    """The first web file the agent writes in a task opens the preview beside its work; later saves only reload."""
+    """The first web file the agent writes in a task opens the preview beside its work, once the page really answers;
+    later saves only reload. A dev server starts by itself only for work the user asked for."""
     from firedev.events import Event
     from firedev.session import Task
 
     svc, _ = make_service(tmp_path)
     m = svc.previews
+    m.tunnels = object()
+    svc.config.settings.preview_port = 8132
     p = m.previews["web"]
     s = svc.sessions["web"]
-    s.current = Task(id="t1", title="Build a camping site", kind="agent")
-    started = []
+    s.current = Task(id="t1", title="Build a camping site", kind="agent", status="running")
+    started, answers = [], [None, 404, 200]
 
     async def refresh(pid, quiet=False):
         return p
@@ -526,30 +529,57 @@ async def test_live_build_puts_the_page_on_the_tv_once_per_task(tmp_path, monkey
         started.append(source)
         p.status, p.port = "running", 5390
         return p
+
+    async def probe(pid, port, timeout=4.0):
+        return answers.pop(0) if answers else 200
     monkeypatch.setattr(m, "refresh", refresh)
     monkeypatch.setattr(m, "ensure_running", ensure_running)
+    monkeypatch.setattr(m, "probe", probe)
     monkeypatch.setattr(asyncio, "sleep", (lambda real: (lambda d, *a: real(0)))(asyncio.sleep))
     p.kind, p.framework, p.status = "static", "static", "idle"
     q = svc.bus.subscribe()
+
+    async def settle():
+        for _ in range(40):
+            await asyncio.sleep(0)
+
+    def offers():
+        out = []
+        while not q.empty():
+            ev = q.get_nowait()
+            if ev.type == "preview_offer":
+                out.append(ev)
+        return out
+
     for path in ("index.html", "styles.css"):
         await m._on_event(Event(type="file_changed", project="web", task="t1", data={"path": path}))
-        for _ in range(5):
-            await asyncio.sleep(0)
-    offers = []
-    while not q.empty():
-        ev = q.get_nowait()
-        if ev.type == "preview_offer":
-            offers.append(ev)
-    assert started == ["agent"], "FireDev's own static server starts by itself, once"
-    assert len(offers) == 1 and offers[0].data["live"] and offers[0].task == "t1"
+        await settle()
+    got = offers()
+    assert started == ["voice"], "the server starts once, for the user's request"
+    assert answers == [], "no switch until the page answered below 400"
+    assert len(got) == 1 and got[0].data["live"] and got[0].task == "t1"
 
-    # A dev server runs project code: FireDev never starts it for a live build (the agent asks via `firedev preview open`).
-    s.current = Task(id="t2", title="More", kind="agent")
-    p.kind, p.framework, p.status = "web", "vite", "idle"
+    # The user asked for more: their project's dev server starts too (asking is the approval).
+    s.current = Task(id="t2", title="More", kind="agent", status="running")
+    p.kind, p.framework, p.status, p.command = "web", "vite", "idle", "vite --port {port}"
     await m._on_event(Event(type="file_changed", project="web", task="t2", data={"path": "src/App.jsx"}))
-    for _ in range(5):
-        await asyncio.sleep(0)
-    assert started == ["agent"]
+    await settle()
+    assert started == ["voice", "voice"] and len(offers()) == 1
+
+    # Work the agent started on its own never starts project code by itself.
+    s.current = Task(id="t3", title="Tidy", kind="agent", status="running", source="agent")
+    p.status = "idle"
+    await m._on_event(Event(type="file_changed", project="web", task="t3", data={"path": "src/App.jsx"}))
+    await settle()
+    assert started == ["voice", "voice"] and offers() == []
+
+    # No preview gateway: never switch to a preview that can't be shown.
+    svc.config.settings.preview_port = 0
+    s.current = Task(id="t4", title="Again", kind="agent", status="running")
+    p.status = "idle"
+    await m._on_event(Event(type="file_changed", project="web", task="t4", data={"path": "index.html"}))
+    await settle()
+    assert offers() == []
 
 
 def test_live_build_setting(tmp_path):
@@ -589,3 +619,48 @@ async def test_from_home_a_request_about_the_project_goes_to_the_default_one(tmp
         seen.append(q.get_nowait())
     reply = next(e for e in seen if e.type == "voice_reply")
     assert reply.project == "web", "the TV is told which project's screen to show"
+
+
+async def test_more_work_on_a_live_page_shows_it_as_the_task_starts(tmp_path, monkeypatch):
+    """"Make it more premium" on a site that's being served: the page goes on screen at once, before any file changes;
+    work the agent starts itself, or a project with nothing served, doesn't switch."""
+    from firedev.events import Event
+    from firedev.session import Task
+
+    svc, _ = make_service(tmp_path)
+    m = svc.previews
+    m.tunnels = object()
+    svc.config.settings.preview_port = 8132
+    p = m.previews["web"]
+    s = svc.sessions["web"]
+
+    async def refresh(pid, quiet=False):
+        p.status, p.kind, p.port, p.detected = "running", "static", 5390, 1e12
+        return p
+
+    async def probe(pid, port, timeout=4.0):
+        return 200
+
+    async def nothing(*a, **k):
+        return None
+    monkeypatch.setattr(m, "refresh", refresh)
+    monkeypatch.setattr(m, "probe", probe)
+    monkeypatch.setattr(m, "_watch_build", nothing)
+    monkeypatch.setattr(asyncio, "sleep", (lambda real: (lambda d, *a: real(0)))(asyncio.sleep))
+    q = svc.bus.subscribe()
+
+    async def start(task):
+        s.current = task
+        await m._on_event(Event(type="task_started", project="web", task=task.id, data={"task": task.to_dict()}))
+        for _ in range(30):
+            await asyncio.sleep(0)
+        out = []
+        while not q.empty():
+            ev = q.get_nowait()
+            if ev.type == "preview_offer":
+                out.append(ev)
+        return out
+
+    got = await start(Task(id="t1", title="Make it more premium", kind="agent", status="running"))
+    assert len(got) == 1 and got[0].data["live"] and got[0].task == "t1"
+    assert await start(Task(id="t2", title="Tidy up", kind="agent", status="running", source="agent")) == []

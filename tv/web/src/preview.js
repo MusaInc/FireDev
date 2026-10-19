@@ -74,7 +74,7 @@ export function createPreview(app) {
       if (ev.type === 'preview_state') return ctl.onState(pid, d.preview);
       if (ev.type === 'preview_reload') {
         const cur = ctl.screen();
-        if (cur && cur.pid === pid) cur.reloadFrame(d.reason);
+        if (cur && cur.pid === pid) cur.reloadFrame(d.reason, { css: !!d.css, files: d.files || [] });
         return null;
       }
       if (ev.type === 'preview_control') {

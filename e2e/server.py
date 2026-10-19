@@ -66,9 +66,25 @@ if os.environ.get("FIREDEV_E2E_SCENARIO") == "preview":
     (web / "about.html").write_text("<!doctype html><meta charset=utf-8><title>About us</title><h1>About page</h1>")
     subprocess.run(["git", "init", "-q", str(web)], check=True)
     cfg["server"]["preview_port"] = int(os.environ.get("FIREDEV_E2E_PREVIEW_PORT", "8136"))
+    # An empty site the stand-in agent builds (its DEMO script): live preview and live code end to end.
+    demo = DIR / "demo"
+    demo.mkdir(parents=True)
+    (demo / "README.md").write_text("Pulse\n")
+    (demo / "src").mkdir()
+    (demo / "src" / "app.txt").write_text("broken\n")
+    subprocess.run(["git", "init", "-q", str(demo)], check=True)
+    dg = ["git", "-C", str(demo), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*dg, "add", "-A"], check=True)
+    subprocess.run([*dg, "commit", "-qm", "init"], check=True)
+    (demo / "test.sh").write_text("#!/usr/bin/env bash\necho 'ran 3 tests'\n")
+    (demo / "test.sh").chmod(0o755)
     cfg["projects"] = [{"id": "web", "name": "Fixture Site", "machine": "local", "path": str(web), "agent": "shell",
-                        "tmux_session": f"firedev-e2e-web-{PORT}"}]
-    subprocess.run(["tmux", "kill-session", "-t", f"=firedev-e2e-web-{PORT}"], capture_output=True)
+                        "tmux_session": f"firedev-e2e-web-{PORT}"},
+                       {"id": "demo", "name": "Pulse", "machine": "local", "path": str(demo), "agent": "codex",
+                        "tmux_session": f"firedev-e2e-demo-{PORT}", "agent_options": {"binary": str(ROOT / "backend/tests/fixtures/fake-codex")},
+                        "actions": {"test": {"run": "./test.sh", "kind": "tests", "title": "Run the tests"}}}]
+    for t in (f"=firedev-e2e-web-{PORT}", f"=firedev-e2e-demo-{PORT}"):
+        subprocess.run(["tmux", "kill-session", "-t", t], capture_output=True)
 else:
     cfg["server"]["preview_port"] = 0
 DIR.mkdir(parents=True, exist_ok=True)

@@ -11,12 +11,14 @@
 
 import { liveState, STAGES } from '../live.js';
 import { nowPanel } from './livebits.js';
+import { CodePanel } from '../codepanel.js';
 import { clear, focusable, h, icon } from '../util.js';
 import { SPLITS, VIEWPORTS, ZOOMS } from '../preview.js';
 import { agentPill, connPill } from './common.js';
 
 const SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-modals allow-downloads allow-pointer-lock';
 const SPLIT_GAP = 32;
+const CODE_W = 500; // the live code column
 const INNER_W = 1920 - 96 * 2;
 
 export class PreviewScreen {
@@ -30,6 +32,8 @@ export class PreviewScreen {
     this.frame = null;
     this.frameOrigin = null;
     this.ready = false;
+    this.content = null; // how much the page has drawn (null: not reported yet)
+    this.next = null; // the page reloading off screen, swapped in once it has loaded (no white flash)
     this.interacting = false;
     this.ticketing = false;
     this.page = null;
@@ -68,13 +72,18 @@ export class PreviewScreen {
       tb('size', '', () => this.cycleSplit()),
       tb('reload', 'Reload', () => this.reloadFrame('reload')),
       tb('use', 'Use the page', () => { this.app.focus.focus('frame'); this.interact(true); }));
+    // Live code: the real code behind each change, replayed beside the page (see codepanel.js).
+    this.code = new CodePanel(this.agentName());
     this.el = h('section.screen.preview-screen', null,
       h('div.topbar', null, this.head, this.chips),
-      h('div.pv-main', null, this.agent, this.box),
+      h('div.pv-main', null, this.agent, this.box, this.code.el),
       this.toolbar, this.sink);
     this.onBlur = () => setTimeout(() => this.reclaim(), 0);
     window.addEventListener('blur', this.onBlur);
     this.applyPrefs(true);
+    // Opened mid-build: replay what the agent just wrote (labelled with how long ago), newest last.
+    const recent = (app.code[this.pid] || []).filter((c) => Date.now() - c.ts < 120000).slice(-2);
+    recent.forEach((c) => this.code.enqueue(c.data, c.ts));
     this.connect({ start: route.start, path: route.path, screenshots: this.screenshots });
     this.report(true);
   }
@@ -149,8 +158,10 @@ export class PreviewScreen {
 
   dropFrame() {
     if (this.frame) this.frame.remove();
+    this.dropNext();
     this.frame = null;
     this.ready = false;
+    this.content = null;
     if (this.interacting) this.interact(false);
   }
 
@@ -169,12 +180,21 @@ export class PreviewScreen {
   }
 
   onMessage(e) {
-    if (!this.frame || e.source !== this.frame.contentWindow) return;
     if (this.frameOrigin && e.origin !== this.frameOrigin) return;
     const m = e.data || {};
+    if (this.next && e.source === this.next.contentWindow) return this.onNextMessage(m);
+    if (!this.frame || e.source !== this.frame.contentWindow) return;
     switch (m.fd) {
+      case 'content':
+        this.content = Number(m.n) || 1;
+        this.update();
+        break;
+      case 'css':
+        if (!m.n) this.swapReload(); // no stylesheet to swap: reload the page instead
+        break;
       case 'hello':
       case 'nav':
+        if (m.fd === 'hello') this.content = typeof m.content === 'number' ? m.content : 1;
         this.ready = true;
         this.retries = 0;
         this.page = typeof m.page === 'string' ? m.page.slice(0, 300) : this.page;
@@ -226,10 +246,56 @@ export class PreviewScreen {
     }
   }
 
-  reloadFrame(reason) {
+  /** The agent saved something. Stylesheets swap in place; anything else reloads off screen and swaps in when it
+   *  has loaded, so the page on the TV never goes blank between versions. */
+  reloadFrame(reason, opts) {
+    opts = opts || {};
     if (!this.frame) { this.connect({ screenshots: this.screenshots }); return; }
-    if (!this.ready || !this.post({ op: 'reload' })) this.reconnect();
-    if (reason && reason !== 'reload') this.flash('Updated · ' + reason);
+    if (!this.ready) { if (!this.post({ op: 'reload' })) this.reconnect(); return; }
+    if (opts.css) this.post({ op: 'css' });
+    else this.swapReload();
+    if (reason && reason !== 'reload') {
+      this.flash('Updated · ' + reason.replace(/ changed$/, ''));
+      this.box.classList.remove('pv-pulse');
+      void this.box.offsetWidth;
+      this.box.classList.add('pv-pulse');
+    }
+  }
+
+  swapReload() {
+    if (!this.frame || !this.frameOrigin || this.screenshots) { if (!this.post({ op: 'reload' })) this.reconnect(); return; }
+    this.post({ op: 'savescroll' });
+    this.dropNext();
+    const next = h('iframe.pv-frame.pv-next', { src: this.frameOrigin + (this.page || '/'), sandbox: SANDBOX, tabindex: '-1',
+      referrerpolicy: 'no-referrer', title: 'Live preview (updating)', allow: 'clipboard-write; fullscreen' });
+    this.next = next;
+    next.addEventListener('load', () => this.reclaim());
+    // A version that never says hello (a server mid-restart, an expired session) falls back to a plain reload.
+    this.nextTimer = setTimeout(() => { if (this.next === next) { this.dropNext(); if (!this.post({ op: 'reload' })) this.reconnect(); } }, 9000);
+    this.device.appendChild(next);
+  }
+
+  onNextMessage(m) {
+    if (m.fd === 'expired' || m.fd === 'down') { this.dropNext(); if (!this.post({ op: 'reload' })) this.reconnect(); return; }
+    if (m.fd !== 'hello') return;
+    const next = this.next;
+    this.next = null;
+    clearTimeout(this.nextTimer);
+    if (this.frame) this.frame.remove();
+    next.classList.remove('pv-next');
+    this.frame = next;
+    this.ready = true;
+    this.content = typeof m.content === 'number' ? m.content : 1;
+    this.page = typeof m.page === 'string' ? m.page.slice(0, 300) : this.page;
+    this.title = typeof m.title === 'string' ? m.title.slice(0, 120) : this.title;
+    this.reclaim();
+    this.update();
+  }
+
+  dropNext() {
+    clearTimeout(this.nextTimer);
+    if (this.next) this.next.remove();
+    this.next = null;
   }
 
   flash(text) {
@@ -271,7 +337,18 @@ export class PreviewScreen {
 
   close() { this.app.go('workspace', this.pid); }
 
+  onCode(change, ts) { this.code.enqueue(change, ts); this.layout(); }
+
+  /** Three columns (agent, page, code) while there's code to show or the agent is building; two otherwise. */
+  codeVisible() {
+    if (this.prefs.layout === 'full') return false;
+    const p = this.app.project(this.pid);
+    const t = p && (p.task || p.last_task);
+    return !!((this.app.code[this.pid] || []).length || (t && t.kind === 'agent' && (t.status === 'running' || t.status === 'queued')));
+  }
+
   unmount() {
+    this.code.destroy();
     this.gone = true;
     window.removeEventListener('blur', this.onBlur);
     clearTimeout(this.flashTimer);
@@ -344,7 +421,10 @@ export class PreviewScreen {
   /** Sizes the page's frame: a real CSS viewport (desktop, tablet, mobile) scaled to fit the box. */
   layout() {
     const full = this.prefs.layout === 'full';
-    const pw = Math.round((INNER_W - SPLIT_GAP) * SPLITS[this.prefs.split]);
+    const three = this.codeVisible();
+    this.el.classList.toggle('pv-3col', three);
+    this.code.el.style.display = three ? '' : 'none';
+    const pw = Math.round((INNER_W - SPLIT_GAP * (three ? 2 : 1) - (three ? CODE_W : 0)) * SPLITS[this.prefs.split]);
     this.box.style.width = full ? '' : pw + 'px';
     this.agent.style.display = full ? 'none' : '';
     const W = full ? 1920 : pw;
@@ -407,6 +487,9 @@ export class PreviewScreen {
     b.size.style.display = full ? 'none' : '';
     b.use.style.display = this.frame && this.ready ? '' : 'none';
     this.renderAgent(p);
+    const live = liveState(p);
+    this.code.setAgent(live && (live.running || live.waiting || live.task.kind === 'agent') ? live : null, this.agentName());
+    if (this.codeVisible() !== this.el.classList.contains('pv-3col')) this.layout();
     this.renderStatus(st, p);
     this.renderBanner();
   }
@@ -452,11 +535,13 @@ export class PreviewScreen {
   renderStatus(st, p) {
     const s = st.status;
     const showFrame = !!this.frame && (s === 'running' || this.screenshots) && !this.down;
-    const key = [s, st.message, (st.log || []).slice(-8), st.needs_install, this.notice, showFrame, this.ready, this.down, (st.alternatives || []).length, p.connection];
-    this.device.style.visibility = showFrame && this.ready ? 'visible' : 'hidden';
+    // Never a blank page: the frame shows once the page has loaded and drawn something.
+    const drawn = this.ready && this.content !== 0;
+    const key = [s, st.message, (st.log || []).slice(-8), st.needs_install, this.notice, showFrame, this.ready, drawn, this.down, (st.alternatives || []).length, p.connection];
+    this.device.style.visibility = showFrame && drawn ? 'visible' : 'hidden';
     if (!this.changed('status', key)) return;
     const el = clear(this.statusEl);
-    if (showFrame && this.ready) { el.style.display = 'none'; return; }
+    if (showFrame && drawn) { el.style.display = 'none'; return; }
     el.style.display = '';
     const btn = (id, label, fn, cls) => focusable(h('button.btn.small' + (cls || ''), null, label), id, { select: fn });
     const log = (st.log || []).length ? h('div.pv-log.mono', null, st.log.slice(-9).map((l) => h('div.clip', null, l))) : null;
@@ -465,6 +550,9 @@ export class PreviewScreen {
     } else if (this.down) {
       el.append(h('span.spinner'), h('div.t-label', null, 'Reconnecting to the preview…'), h('div.t-meta', null, 'The page comes back as soon as the server answers.'));
       setTimeout(() => { if (!this.gone && this.down) { this.down = false; this.reconnect(); } }, 3000);
+    } else if (showFrame && this.ready) {
+      el.append(h('span.spinner'), h('div.t-label', null, 'The page is up, with nothing on it yet'),
+        h('div.t-meta', null, 'It appears here the moment ' + this.agentName() + ' puts something on it.'));
     } else if (showFrame || (s === 'running' && (this.ticketing || this.frame))) {
       el.append(h('span.spinner'), h('div.t-label', null, 'Opening the page…'));
     } else if (this.notice) {

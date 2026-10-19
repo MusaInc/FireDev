@@ -165,8 +165,10 @@
     switch (m.op) {
       case 'key': return act(m.action);
       case 'reload':
-        try { sessionStorage.setItem('__fd_scroll', JSON.stringify([page(), window.scrollX, window.scrollY])); } catch (e) { /* no storage */ }
+        saveScroll();
         return location.reload();
+      case 'savescroll': return saveScroll();
+      case 'css': return swapStyles();
       case 'back': return history.back();
       case 'forward': return history.forward();
       case 'top': return window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -204,6 +206,45 @@
     if (map[k]) { e.preventDefault(); act(map[k]); }
   }, true);
 
+  function saveScroll() {
+    try { sessionStorage.setItem('__fd_scroll', JSON.stringify([page(), window.scrollX, window.scrollY])); } catch (e) { /* no storage */ }
+  }
+
+  // Stylesheets reloaded in place: the new sheet loads beside the old one, which goes once it has applied, so the
+  // page never loses its styles, its scroll or its state. No same-origin sheets: the TV reloads the page instead.
+  function swapStyles() {
+    var links = document.querySelectorAll('link[rel~="stylesheet"]');
+    var n = 0;
+    for (var i = 0; i < links.length; i++) {
+      var old = links[i];
+      var u;
+      try { u = new URL(old.href, location.href); } catch (e) { continue; }
+      if (u.origin !== location.origin) continue;
+      u.searchParams.set('__fd', String(Date.now()));
+      var fresh = old.cloneNode();
+      fresh.href = u.toString();
+      fresh.onload = fresh.onerror = (function (o) { return function () { if (o.parentNode) o.parentNode.removeChild(o); }; })(old);
+      old.parentNode.insertBefore(fresh, old.nextSibling);
+      n++;
+    }
+    post({ fd: 'css', n: n });
+  }
+
+  // How much the page shows: text and media. The TV keeps a page that hasn't drawn anything yet off screen.
+  function contentSize() {
+    var b = document.body;
+    if (!b) return 0;
+    return (b.innerText || b.textContent || '').replace(/\s+/g, '').length + b.querySelectorAll('img,svg,canvas,video,picture,iframe,input,button').length;
+  }
+
+  function watchContent() {
+    if (contentSize() > 0 || !window.MutationObserver) return;
+    var mo = new MutationObserver(function () {
+      if (contentSize() > 0) { mo.disconnect(); post({ fd: 'content', n: contentSize() }); }
+    });
+    mo.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+  }
+
   function report() { post({ fd: 'nav', page: page(), title: document.title || '' }); }
   ['pushState', 'replaceState'].forEach(function (fn) {
     var orig = history[fn];
@@ -234,7 +275,8 @@
       sessionStorage.removeItem('__fd_scroll');
       if (saved && saved[0] === page()) window.scrollTo(saved[1], saved[2]);
     } catch (e) { /* no storage */ }
-    post({ fd: 'hello', page: page(), title: document.title || '' });
+    post({ fd: 'hello', page: page(), title: document.title || '', content: contentSize() });
+    watchContent();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ready);
   else ready();

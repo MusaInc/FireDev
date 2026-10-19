@@ -20,7 +20,15 @@ export function humanize(command) {
   const c = String(command || '').trim().replace(/^(sudo|env \S+=\S+|cd \S+ &&)\s+/g, '');
   const words = c.split(/\s+/);
   const first = base(words[0]);
-  const arg = words.slice(1).filter((w) => !w.startsWith('-')).pop();
+  const arg = words.slice(1).map((w) => w.replace(/^['"]|['"]$/g, '')).filter((w) => w && !w.startsWith('-') && /^[\w.\/~@-]+$/.test(w)).pop();
+  if (first === 'firedev') {
+    const sub = words[1] || '';
+    if (sub === 'say') return { verb: 'Talking', object: 'you through it', icon: 'spark', stage: null, soft: true };
+    if (sub === 'preview') return { verb: 'Opening', object: 'the live preview', icon: 'globe', stage: 'verify', soft: true };
+    if (sub === 'ui') return { verb: 'Designing', object: 'a screen', icon: 'agent', stage: 'build', soft: true };
+    if (sub === 'run') return humanize(words.slice(2).join(' ') === 'test' ? './test.sh' : words.slice(2).join(' ') || 'build');
+    return { verb: 'Checking', object: 'with FireDev', icon: 'spark', stage: null, soft: true };
+  }
   if (/(^|\/)test\.sh$|\b(pytest|jest|vitest|mocha|phpunit|rspec)\b|\b(npm|pnpm|yarn|bun) (run )?test\b|\bgo test\b|\bcargo test\b|gradlew? \S*test/i.test(c)) {
     return { verb: 'Running', object: 'the tests', icon: 'flask', stage: 'verify' };
   }

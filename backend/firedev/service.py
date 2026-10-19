@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 
 from . import genui, intents, risk, sysagents
 from .auth import Client, DeviceStore
+from .codefeed import CodeFeed
 from .config import Config
 from .events import Bus
 from .preview import PreviewManager
@@ -74,6 +75,7 @@ class FireDev:
         self.bus = bus or Bus(config.settings.data_dir / "history")
         self.sessions = {pid: ProjectSession(self, p) for pid, p in config.projects.items()}
         self.previews = PreviewManager(self)
+        self.code = CodeFeed()
         self.approvals: dict[str, Approval] = {}
         self._dirty: set[str] = set()
         self._flush: asyncio.TimerHandle | None = None

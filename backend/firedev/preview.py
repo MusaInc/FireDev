@@ -339,6 +339,8 @@ class PreviewManager:
         self._touched: dict[str, set[str]] = {}
         self._before: dict[str, dict] = {}
         self._live: dict[str, str] = {}  # project -> the agent task whose build is already live on the TV
+        self._builds: dict[str, asyncio.Task] = {}  # project -> the file watcher of its running agent task
+        self._reload_files: dict[str, list] = {}  # project -> the files saved since the pending reload was scheduled
         self._task: asyncio.Task | None = None
 
     # --- lifecycle ---------------------------------------------------------------------------------------
@@ -348,7 +350,7 @@ class PreviewManager:
             self._task = asyncio.get_running_loop().create_task(self._listen())
 
     async def stop(self) -> None:
-        for t in [self._task, *self._starting.values(), *self._watchers.values()]:
+        for t in [self._task, *self._starting.values(), *self._watchers.values(), *self._builds.values()]:
             if t:
                 t.cancel()
 
@@ -431,8 +433,9 @@ class PreviewManager:
             path = str(d.get("path") or "")
             if WEB_FILES.search(path):
                 self._touched.setdefault(pid, set()).add(path)
-                if p.status == "running" and not p.hmr and p.viewers:
-                    self._schedule_reload(p, f"{posixpath.basename(path)} changed")
+                watching = self._watchers.get(pid)
+                if p.status == "running" and not p.hmr and p.viewers and not (d.get("source") == "watch" and watching and not watching.done()):
+                    self._schedule_reload(p, f"{posixpath.basename(path)} changed", [path])
                 if posixpath.basename(path) in ("package.json", "index.html") and p.status in ("unknown", "none", "native", "idle"):
                     p.detected = 0  # the project may have just become a web project
                 if ev.task and self._live.get(pid) != ev.task and self._live_build(pid):
@@ -445,6 +448,16 @@ class PreviewManager:
             if task.get("kind") == "agent" and task.get("lane") != "ui":
                 self._touched[pid] = set()
                 self._before[pid] = self._web_changes(pid)
+                self.service.code.prime(self.service.sessions[pid])
+                if self._live_build(pid) and ev.task:
+                    old = self._builds.pop(pid, None)
+                    if old and not old.done():
+                        old.cancel()
+                    self._builds[pid] = asyncio.get_running_loop().create_task(self._watch_build(p, ev.task))
+                    # More work on a page that's already live ("make it more premium"): show it now, while the agent
+                    # thinks, so every change lands in front of the user. A new build waits for its first page.
+                    if task.get("source") not in ("agent", "assistant"):
+                        asyncio.get_running_loop().create_task(self._live_if_running(p, ev.task))
         elif ev.type in ("task_completed", "task_failed"):
             task = d.get("task") or {}
             if task.get("kind") != "agent" or task.get("lane") == "ui":
@@ -457,26 +470,121 @@ class PreviewManager:
 
     async def _go_live(self, p: Preview, task_id: str, path: str) -> None:
         """Watch it being built: the first web file the agent writes in a task puts the page on the TV, and every
-        save after that reloads it. FireDev's own static server starts by itself (it runs no project code); a dev
-        server is the agent's to start (`firedev preview open`, which asks the user first)."""
+        save after that reloads it. FireDev starts the server itself: its own static server always (it runs no
+        project code), the project's dev server when the user asked for this work (asking is the approval;
+        installing dependencies still asks on the TV). The TV only switches once the page really answers."""
         s = self.service.sessions[p.pid]
         task = s._task(task_id)
-        if not task or task.kind != "agent" or task.lane == "ui":
+        if not task or task.kind != "agent" or task.lane == "ui" or not self.gateway_available():
             return
         await asyncio.sleep(1.0)  # let the first files land
+        user_asked = task.source not in ("agent", "assistant")
+        deadline = time.time() + START_TIMEOUT
         try:
-            if p.status != "running":
-                await self.refresh(p.pid, quiet=True)
-                if p.status != "running" and p.kind in ("web", "static") and self.start_level(p, "agent") == 0:
-                    await self.ensure_running(p.pid, "agent")
+            while time.time() < deadline and task.status in ("running", "queued", "waiting_approval", "completed"):
+                if p.status != "running":
+                    await self.refresh(p.pid, quiet=True)
+                if p.status != "running" and p.kind in ("web", "static"):
+                    if p.needs_install and task.status != "completed":
+                        # The agent is probably installing them right now; wait rather than ask.
+                        await asyncio.sleep(3)
+                        continue
+                    source = "voice" if user_asked else "agent"
+                    if self.start_level(p, source) <= 1:
+                        await self.ensure_running(p.pid, source)
+                if p.status == "running" and p.port:
+                    code = await self.probe(p.pid, p.port)
+                    if code is not None and code < 400:
+                        break
+                    p.message = "Waiting for the first page…"
+                elif p.status in ("failed", "native", "none") and task.status == "completed":
+                    return
+                await asyncio.sleep(2)
+            else:
+                return
         except Exception:  # noqa: BLE001 - the live view is a bonus; the agent's work goes on regardless
             log.exception("preview: going live failed")
             return
-        if p.status != "running":
+        if p.status != "running" or self._live.get(p.pid) != task_id:
             return
         self.service.bus.emit("preview_offer", p.pid, task_id, preview=p.to_dict(), live=True, auto=True,
                               message=f"Watch {s.adapter.display} build it: the page updates as files change.",
                               files=[path])
+
+    async def _live_if_running(self, p: Preview, task_id: str) -> None:
+        """At the start of the user's request: if the project's page is already being served, put it on screen now.
+        Never starts anything (a new build goes live with its first page)."""
+        if p.status != "running" or time.time() - p.detected > 20:
+            try:
+                await self.refresh(p.pid, quiet=True)
+            except Exception:  # noqa: BLE001
+                return
+        if p.status == "running" and p.kind in ("web", "static") and self._live.get(p.pid) != task_id:
+            self._live[p.pid] = task_id
+            await self._go_live(p, task_id, "")
+
+    def gateway_available(self) -> bool:
+        st = self.service.config.settings
+        return bool(st.preview_port or st.preview_url) and self.tunnels is not None
+
+    async def _watch_build(self, p: Preview, task_id: str) -> None:
+        """Follows the files an agent task writes, however it writes them: apply_patch edits arrive as events, but
+        `cat > index.html` from its shell doesn't. Every couple of seconds this lists web files modified since the
+        last look (git or not), records the ones no event reported as file activity, and lets them drive the live
+        preview (going live, reloads)."""
+        s = self.service.sessions[p.pid]
+        d = f"{s.state_dir}/preview"
+        q = shlex.quote
+        mark, nxt = f"{d}/watch-{task_id}", f"{d}/watch-{task_id}.next"
+        prune = " -o ".join(f"-name {n}" for n in ("node_modules", ".git", ".firedev", "dist", "build", ".next", ".cache", "__pycache__", ".venv"))
+        find = (f"cd {q(s.path)} 2>/dev/null && find . \\( {prune} \\) -prune -o -type f -newer {q(mark)} -print 2>/dev/null | head -60")
+        try:
+            await s.remote.run(f"mkdir -p {q(d)} && touch {q(mark)}", timeout=10)
+            _, out, _ = await s.remote.run(f"cd {q(s.path)} 2>/dev/null && find . \\( {prune} \\) -prune -o -type f -print 2>/dev/null | head -4000", timeout=20)
+        except RemoteError:
+            return
+        existed = {ln[2:] for ln in out.splitlines() if ln.startswith("./")}
+        pending: dict[str, float] = {}
+        try:
+            while True:
+                task = s._task(task_id)
+                if not task or task.status not in ("running", "queued", "waiting_approval"):
+                    break
+                await asyncio.sleep(2.0)
+                try:
+                    _, out, _ = await s.remote.run(f"touch {q(nxt)} && {{ {find}; }}; mv -f {q(nxt)} {q(mark)}", timeout=15)
+                except RemoteError:
+                    continue
+                now = time.time()
+                for ln in out.splitlines():
+                    rel = ln[2:] if ln.startswith("./") else ln
+                    if WEB_FILES.search(rel):
+                        pending.setdefault(rel, now)
+                # A file seen here gets one look later: if the agent's own file event reported it meanwhile, it's
+                # already on screen; otherwise it was written from the shell and this is its only record.
+                for rel, seen in list(pending.items()):
+                    if now - seen < 2.5:
+                        continue
+                    del pending[rel]
+                    reported = any(a["kind"] == "file" and a.get("task") == task_id and a.get("detail") == rel and a["ts"] >= seen - 4
+                                   for a in list(s.activity)[-40:])
+                    if reported:
+                        continue
+                    change = "update" if rel in existed else "add"
+                    existed.add(rel)
+                    if task:
+                        task.files[rel] = change
+                    s.add_activity("file", f"{'Created' if change == 'add' else 'Edited'} {posixpath.basename(rel)}", detail=rel, level=1, task=task_id)
+                    s.emit("file_changed", task_id, path=rel, change=change, source="watch")
+                    s._spawn(s.refresh_changes())
+                    s._spawn(self.service.code.capture(s, task_id, rel, change))
+        except asyncio.CancelledError:
+            pass
+        finally:
+            try:
+                await s.remote.run(f"rm -f {q(mark)} {q(nxt)}", timeout=10)
+            except Exception:  # noqa: BLE001
+                pass
 
     def _web_changes(self, pid: str) -> dict:
         files = self.service.sessions[pid].changes.get("files") or []
@@ -517,12 +625,21 @@ class PreviewManager:
         self.service.bus.emit("preview_offer", p.pid, task.get("id"), preview=p.to_dict(), message=msg, auto=auto and (ready or p.kind == "static"),
                               files=sorted(touched)[:8])
 
-    def _schedule_reload(self, p: Preview, reason: str) -> None:
+    def _schedule_reload(self, p: Preview, reason: str, files: list[str] | None = None) -> None:
+        """One reload for a burst of saves. When every file in the burst is a stylesheet, the TV swaps the styles in
+        place (no reload: the page keeps its scroll, its state and doesn't flash)."""
         old = self._reload_at.pop(p.pid, None)
         if old:
             old.cancel()
-        self._reload_at[p.pid] = asyncio.get_running_loop().call_later(
-            0.35, lambda: self.service.bus.emit("preview_reload", p.pid, None, reason=reason))
+        batch = self._reload_files.setdefault(p.pid, [])
+        batch.append(None if files is None else list(files))
+
+        def fire():
+            parts = self._reload_files.pop(p.pid, [])
+            changed = [f for part in parts if part for f in part]
+            css = bool(changed) and all(part is not None for part in parts) and all(f.lower().endswith(".css") for f in changed)
+            self.service.bus.emit("preview_reload", p.pid, None, reason=reason, css=css, files=sorted(set(changed))[:8])
+        self._reload_at[p.pid] = asyncio.get_running_loop().call_later(0.35, fire)
 
     # --- detection ---------------------------------------------------------------------------------------
 
@@ -912,7 +1029,7 @@ class PreviewManager:
                     break
                 files = [ln[8:].lstrip("./") for ln in chunk.splitlines() if ln.startswith("changed ")]
                 if files:
-                    self._schedule_reload(p, f"{posixpath.basename(files[-1])} changed")
+                    self._schedule_reload(p, f"{posixpath.basename(files[-1])} changed", files)
         except RemoteError:
             pass
 
@@ -933,7 +1050,13 @@ class PreviewManager:
             if arg:
                 if arg.startswith("/"):
                     self.previews[pid].page = _safe_path(arg)
-            p = await self.ensure_running(pid, "agent", install=self.previews[pid].needs_install)
+            # Building what the user asked for: their request covers starting the dev server (installs still ask).
+            task = s.current
+            source = "voice" if task and task.kind == "agent" and task.source not in ("agent", "assistant") else "agent"
+            p = await self.ensure_running(pid, source, install=self.previews[pid].needs_install)
+            code = await self.probe(pid, p.port) if p.status == "running" and p.port else None
+            if p.status == "running" and (code is None or code >= 400):
+                return "done", self.describe(p) + f"\nThe server answers {code or 'nothing yet'} on {p.path}: the TV shows it once the page loads."
             if p.status == "running" and sub in ("open", "show"):
                 self.service.bus.emit("preview_control", pid, None, op="show", layout="split", path=self.previews[pid].page,
                                       source="agent")
