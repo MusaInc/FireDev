@@ -32,7 +32,8 @@ class SpeechOutput(context: Context, private val emit: (JSONObject) -> Unit) {
         if (ok) {
             val lang = Locale.getDefault()
             if (tts.isLanguageAvailable(lang) < TextToSpeech.LANG_AVAILABLE) tts.language = Locale.US else tts.language = lang
-            tts.setSpeechRate(1.05f)
+            tts.setSpeechRate(1.06f)
+            tts.setPitch(1.08f) // a touch brighter: an upbeat build buddy, not a sat-nav
         }
         val queued = synchronized(waiting) { ready = ok; waiting.toList().also { waiting.clear() } }
         queued.forEach { (id, text) -> speak(id, text) }

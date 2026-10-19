@@ -8,6 +8,7 @@ for a TV conversation.
 from __future__ import annotations
 
 import posixpath
+import random
 import re
 
 MAX_SPOKEN = 320
@@ -67,9 +68,21 @@ def _names(items: list[str], limit: int = 3) -> str:
     return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
 
 
-def narration(activity: list[dict], now: str = "") -> str:
+# The narrator's lines, plain first: playful mode picks among all of them, plain mode always takes the first.
+MADE = ["I've created {x}", "Fresh out of the oven: {x}", "Say hello to {x}", "New on the scene: {x}"]
+CHANGED = ["updated {x}", "given {x} a makeover", "tweaked {x}"]
+READING = ["I've been reading {x}.", "Just skimmed {x}, so I know what I'm working with.",
+           "Reading {x}. Homework first, fun bit next."]
+NOW = ["Now I'm {x}.", "Next up: {x}.", "Right now I'm {x}."]
+GOOD_NEWS = ["Nice.", "Green across the board.", "Not bad for a TV."]
+
+
+def narration(activity: list[dict], now: str = "", *, playful: bool = True, rng: random.Random | None = None) -> str:
     """What the agent has been doing since it last spoke, said in its own voice ("I've created index.html and
-    script.js. Now I'm editing styles.css."), so a long piece of work never goes quiet. Empty when there's nothing new."""
+    script.js. Now I'm editing styles.css."), so a long piece of work never goes quiet. Empty when there's nothing new.
+    Playful mode varies the wording and now and then adds a light remark; bad news is always said plainly."""
+    rng = rng or random.Random()
+    pick = (lambda opts: rng.choice(opts)) if playful else (lambda opts: opts[0])
     made, changed, removed, read, done = [], [], [], [], []
     for a in activity:
         kind, title = a.get("kind"), a.get("title") or ""
@@ -79,22 +92,24 @@ def narration(activity: list[dict], now: str = "") -> str:
         elif kind == "command" and title.startswith("Reading "):
             read.append(title[len("Reading "):])
         elif kind in ("tests", "build", "deploy"):
-            done.append(title.rstrip("."))
+            done.append((title.rstrip("."), a.get("status") != "failed"))
     changed = [n for n in changed if n not in made]
     parts = []
     if made:
-        parts.append(f"I've created {_names(made)}")
+        parts.append(pick(MADE).format(x=_names(made)) + ".")
     if changed:
-        parts.append(f"{'updated' if made else 'I’ve updated'} {_names(changed)}")
+        parts.append("I've " + ("also " if made else "") + pick(CHANGED).format(x=_names(changed)) + ".")
     if removed:
-        parts.append(f"removed {_names(removed)}")
-    out = (" and ".join(parts) + ".") if parts else ""
+        parts.append(f"I've removed {_names(removed)}.")
+    out = " ".join(parts)
     if not parts and read:
-        out = f"I've been reading {_names(read, 2)}."
-    if done:
-        out = (out + " " + ". ".join(done) + ".").strip()
+        out = pick(READING).format(x=_names(read, 2))
+    for title, ok in done:
+        out = (out + " " + title + ".").strip()
+        if ok and playful and rng.random() < 0.5:
+            out += " " + rng.choice(GOOD_NEWS)
     step = re.sub(r"[.…]+$", "", (now or "").strip())
     # The agent's own steps ("Editing script.js…"), not FireDev's ("Waiting to start", "Asking Codex…").
     if step and step.split(" ", 1)[0].endswith("ing") and not re.match(r"(Waiting|Asking|Reconnecting|Starting)\b", step):
-        out = (out + f" Now I'm {step[0].lower()}{step[1:]}.").strip()
+        out = (out + " " + pick(NOW).format(x=step[0].lower() + step[1:])).strip()
     return clean_for_speech(out.replace("’", "'"))

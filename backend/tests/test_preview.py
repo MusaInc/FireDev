@@ -505,3 +505,57 @@ def test_never_adopts_another_installs_server(tmp_path):
 def test_preview_dataclass_snapshot():
     d = Preview("x", status="running", screenshots=["a/b.png"]).to_dict()
     assert d["screenshots"][0] == {"i": 0, "name": "b.png", "path": "a/b.png"} and d["watching"] is False
+
+
+async def test_live_build_puts_the_page_on_the_tv_once_per_task(tmp_path, monkeypatch):
+    """The first web file the agent writes in a task opens the preview beside its work; later saves only reload."""
+    from firedev.events import Event
+    from firedev.session import Task
+
+    svc, _ = make_service(tmp_path)
+    m = svc.previews
+    p = m.previews["web"]
+    s = svc.sessions["web"]
+    s.current = Task(id="t1", title="Build a camping site", kind="agent")
+    started = []
+
+    async def refresh(pid, quiet=False):
+        return p
+
+    async def ensure_running(pid, source, **kw):
+        started.append(source)
+        p.status, p.port = "running", 5390
+        return p
+    monkeypatch.setattr(m, "refresh", refresh)
+    monkeypatch.setattr(m, "ensure_running", ensure_running)
+    monkeypatch.setattr(asyncio, "sleep", (lambda real: (lambda d, *a: real(0)))(asyncio.sleep))
+    p.kind, p.framework, p.status = "static", "static", "idle"
+    q = svc.bus.subscribe()
+    for path in ("index.html", "styles.css"):
+        await m._on_event(Event(type="file_changed", project="web", task="t1", data={"path": path}))
+        for _ in range(5):
+            await asyncio.sleep(0)
+    offers = []
+    while not q.empty():
+        ev = q.get_nowait()
+        if ev.type == "preview_offer":
+            offers.append(ev)
+    assert started == ["agent"], "FireDev's own static server starts by itself, once"
+    assert len(offers) == 1 and offers[0].data["live"] and offers[0].task == "t1"
+
+    # A dev server runs project code: FireDev never starts it for a live build (the agent asks via `firedev preview open`).
+    s.current = Task(id="t2", title="More", kind="agent")
+    p.kind, p.framework, p.status = "web", "vite", "idle"
+    await m._on_event(Event(type="file_changed", project="web", task="t2", data={"path": "src/App.jsx"}))
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert started == ["agent"]
+
+
+def test_live_build_setting(tmp_path):
+    svc, _ = make_service(tmp_path, project_preview={"live_build": False})
+    assert not svc.previews._live_build("web")
+    svc, _ = make_service(tmp_path, project_preview=False)
+    assert not svc.previews._live_build("web")
+    svc, _ = make_service(tmp_path)
+    assert svc.previews._live_build("web")

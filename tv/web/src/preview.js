@@ -84,6 +84,10 @@ export function createPreview(app) {
       if (ev.type === 'preview_offer') {
         if (d.preview) ctl.states[pid] = d.preview;
         const cur = ctl.screen();
+        // Live build: the page goes on screen beside the agent's work as soon as it exists, and reloads on every save.
+        if (d.live && !(cur && cur.pid === pid) && !app.overlays.approval && app.route.name !== 'connect' && (pid === here || !app.route.project)) {
+          return ctl.open(pid, { layout: 'split' });
+        }
         if ((cur && cur.pid === pid) || pid !== here || app.overlays.approval) return null;
         if (d.auto && (app.route.name === 'workspace' || app.route.name === 'surface' || app.route.name === 'preview')) {
           return ctl.open(pid, { start: true });

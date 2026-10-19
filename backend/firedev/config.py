@@ -77,7 +77,8 @@ class Project:
     agent_options: dict = field(default_factory=dict)
     # Web addresses this project's screens may show in a preview component (its preview server, for example).
     previews: list[str] = field(default_factory=list)
-    # Live preview of the project's own dev server: command ("{port}" is filled in), port, path, dir, hmr, auto_open.
+    # Live preview of the project's own dev server: command ("{port}" is filled in), port, path, dir, hmr, auto_open,
+    # live_build (default true: the page goes on the TV while the agent builds it).
     preview: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -232,11 +233,13 @@ def _preview(raw, where: str) -> dict:
         raw = {"command": raw}
     if not isinstance(raw, dict):
         raise ConfigError(f"{where}.preview must be a command or a mapping")
-    unknown = set(raw) - {"command", "port", "path", "dir", "hmr", "auto_open", "label", "framework", "install"}
+    unknown = set(raw) - {"command", "port", "path", "dir", "hmr", "auto_open", "label", "framework", "install", "live_build"}
     if unknown:
         raise ConfigError(f"{where}.preview: unknown key(s) {sorted(unknown)}")
     if "auto_open" in raw and raw["auto_open"] not in ("auto", "open", "offer", "never"):
         raise ConfigError(f"{where}.preview.auto_open must be auto, open, offer or never")
+    if "live_build" in raw and not isinstance(raw["live_build"], bool):
+        raise ConfigError(f"{where}.preview.live_build must be true or false")
     if raw.get("port") is not None and not (1024 <= int(raw["port"]) <= 65535):
         raise ConfigError(f"{where}.preview.port must be 1024-65535")
     if raw.get("path") and not str(raw["path"]).startswith("/"):

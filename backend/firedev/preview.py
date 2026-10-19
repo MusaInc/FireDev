@@ -338,6 +338,7 @@ class PreviewManager:
         self._reload_at: dict[str, asyncio.TimerHandle] = {}
         self._touched: dict[str, set[str]] = {}
         self._before: dict[str, dict] = {}
+        self._live: dict[str, str] = {}  # project -> the agent task whose build is already live on the TV
         self._task: asyncio.Task | None = None
 
     # --- lifecycle ---------------------------------------------------------------------------------------
@@ -434,6 +435,9 @@ class PreviewManager:
                     self._schedule_reload(p, f"{posixpath.basename(path)} changed")
                 if posixpath.basename(path) in ("package.json", "index.html") and p.status in ("unknown", "none", "native", "idle"):
                     p.detected = 0  # the project may have just become a web project
+                if ev.task and self._live.get(pid) != ev.task and self._live_build(pid):
+                    self._live[pid] = ev.task
+                    asyncio.get_running_loop().create_task(self._go_live(p, ev.task, path))
         elif ev.type == "session_connected":
             asyncio.get_running_loop().create_task(self.refresh(pid, quiet=True))
         elif ev.type == "task_started":
@@ -446,6 +450,33 @@ class PreviewManager:
             if task.get("kind") != "agent" or task.get("lane") == "ui":
                 return
             asyncio.get_running_loop().create_task(self._after_turn(p, task))
+
+    def _live_build(self, pid: str) -> bool:
+        st = self.settings(pid)
+        return st.get("live_build", True) and st.get("auto_open", "auto") != "never"
+
+    async def _go_live(self, p: Preview, task_id: str, path: str) -> None:
+        """Watch it being built: the first web file the agent writes in a task puts the page on the TV, and every
+        save after that reloads it. FireDev's own static server starts by itself (it runs no project code); a dev
+        server is the agent's to start (`firedev preview open`, which asks the user first)."""
+        s = self.service.sessions[p.pid]
+        task = s._task(task_id)
+        if not task or task.kind != "agent" or task.lane == "ui":
+            return
+        await asyncio.sleep(1.0)  # let the first files land
+        try:
+            if p.status != "running":
+                await self.refresh(p.pid, quiet=True)
+                if p.status != "running" and p.kind in ("web", "static") and self.start_level(p, "agent") == 0:
+                    await self.ensure_running(p.pid, "agent")
+        except Exception:  # noqa: BLE001 - the live view is a bonus; the agent's work goes on regardless
+            log.exception("preview: going live failed")
+            return
+        if p.status != "running":
+            return
+        self.service.bus.emit("preview_offer", p.pid, task_id, preview=p.to_dict(), live=True, auto=True,
+                              message=f"Watch {s.adapter.display} build it: the page updates as files change.",
+                              files=[path])
 
     def _web_changes(self, pid: str) -> dict:
         files = self.service.sessions[pid].changes.get("files") or []
@@ -519,7 +550,11 @@ class PreviewManager:
                 # Only adopt a port that answers HTTP: a project can also run a database or a debugger.
                 prefer = self.settings(pid).get("port")
                 ports = sorted({sv["port"] for sv in p.servers}, key=lambda x: (x != prefer, x))
-                p.port = next((x for x in ports if await self.probe(pid, x) is not None), None)
+                p.port = None
+                for x in ports:
+                    if await self.probe(pid, x) is not None:
+                        p.port = x
+                        break
                 if p.port is None:
                     self._apply_idle(p, plan(raw, s.path, self.settings(pid)))
                 else:
