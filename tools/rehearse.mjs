@@ -47,7 +47,9 @@ const sec = () => Math.round((Date.now() - t0) / 100) / 10;
 const timeline = [];
 const log = (what) => { const line = `${String(sec()).padStart(6)}s  ${what}`; timeline.push(line); console.log(line); };
 let shots = 0;
-const shot = async (name) => { const f = `${String(++shots).padStart(3, '0')}-${name}.png`; await tv.screenshot({ path: `${out}/${f}` }); return f; };
+// Each screenshot is logged with its time: tools/cut-demo.mjs finds them in the video to sync it (the recording's clock
+// runs slow when the machine is busy).
+const shot = async (name) => { const f = `${String(++shots).padStart(3, '0')}-${name}.png`; log(`📷 ${f}`); await tv.screenshot({ path: `${out}/${f}` }); return f; };
 
 await tv.goto(base + '/tv/?token=' + encodeURIComponent(tok.tv));
 await tv.waitForTimeout(400);

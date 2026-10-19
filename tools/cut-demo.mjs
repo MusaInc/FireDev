@@ -22,14 +22,51 @@ fs.mkdirSync(work, { recursive: true });
 
 const video = fs.readdirSync(path.join(dir, 'video')).filter((f) => f.endsWith('.webm')).map((f) => path.join(dir, 'video', f))[0];
 const probe = spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', video], { encoding: 'utf8' });
-const length = Number(probe.stdout.trim());
+const videoLength = Number(probe.stdout.trim());
 const report = JSON.parse(fs.readFileSync(path.join(dir, 'report.json'), 'utf8'));
 
-// --- moments worth real time, from the rehearsal timeline ----------------------------------------------------------
 const events = fs.readFileSync(path.join(dir, 'timeline.txt'), 'utf8').split('\n').map((l) => {
   const m = l.match(/^\s*([\d.]+)s\s+(.*)$/);
   return m && { t: Number(m[1]), what: m[2] };
 }).filter(Boolean);
+
+// --- syncing the recording to the timeline ---------------------------------------------------------------------------
+// The recording's clock runs slow when the machine is busy (by ~10% with Codex working), so timeline times can't be used
+// as video times. Anchors [timeline s, video s] come from <dir>/sync.json, or are found by matching the rehearsal's
+// logged screenshots against the video's frames.
+function findAnchors() {
+  const W = 384, H = 216, N = W * H, FPS = 4;
+  const raw = spawnSync('ffmpeg', ['-v', 'error', '-i', video, '-vf', `fps=${FPS},scale=${W}:${H},format=gray`, '-f', 'rawvideo', '-'], { maxBuffer: 2e9 }).stdout;
+  const frames = Math.floor(raw.length / N);
+  const shots = events.map((e) => ({ t: e.t, f: (e.what.match(/^📷 (\S+\.png)$/) || [])[1] })).filter((s) => s.f && fs.existsSync(path.join(dir, s.f)));
+  const step = Math.max(1, Math.floor(shots.length / 16));
+  const found = [[0, 0]];
+  for (const s of shots.filter((_, i) => i % step === 0)) {
+    const img = spawnSync('ffmpeg', ['-v', 'error', '-i', path.join(dir, s.f), '-vf', `scale=${W}:${H},format=gray`, '-f', 'rawvideo', '-'], { maxBuffer: 1e8 }).stdout;
+    const prev = found[found.length - 1][1];
+    let best = Infinity, at = -1;
+    for (let i = Math.max(0, Math.floor(prev * FPS)); i < Math.min(frames, Math.ceil((s.t * 1.4 + 15) * FPS)); i++) {
+      let d = 0;
+      for (let j = 0; j < N; j += 7) d += Math.abs(img[j] - raw[i * N + j]);
+      if (d < best) { best = d; at = i / FPS; }
+    }
+    if (at >= prev && s.t > found[found.length - 1][0]) found.push([s.t, at]);
+  }
+  return found;
+}
+const syncFile = path.join(dir, 'sync.json');
+const anchors = fs.existsSync(syncFile) ? JSON.parse(fs.readFileSync(syncFile, 'utf8')) : findAnchors();
+const interp = (pts, x, from, to) => {
+  let i = pts.findIndex((p) => p[from] > x);
+  if (i === -1) i = pts.length - 1; else if (i === 0) i = 1;
+  const [p, q] = [pts[i - 1], pts[i]];
+  return p[to] + (x - p[from]) * (q[to] - p[to]) / ((q[from] - p[from]) || 1);
+};
+const toVideo = (t) => Math.min(videoLength, Math.max(0, interp(anchors, t, 0, 1)));
+const length = interp(anchors, videoLength, 1, 0); // the timeline's length
+console.log('sync anchors [timeline, video]:', anchors.map(([a, b]) => `${a.toFixed(1)}→${b.toFixed(1)}`).join(' '));
+
+// --- moments worth real time, from the rehearsal timeline ----------------------------------------------------------
 const keep = [[0, 6]]; // splash and home
 const says = [];
 for (const e of events) {
@@ -118,14 +155,16 @@ await browser.close();
 
 // --- ffmpeg --------------------------------------------------------------------------------------------------------
 // Each stretch is its own seeked input, so nothing is decoded twice.
-const inputs = segs.flatMap((s) => ['-ss', s.a.toFixed(3), '-t', (s.b - s.a).toFixed(3), '-i', video]);
+for (const s of segs) { s.va = toVideo(s.a); s.vb = toVideo(s.b); }
+const inputs = segs.flatMap((s) => ['-ss', s.va.toFixed(3), '-t', (s.vb - s.va).toFixed(3), '-i', video]);
 const pngs = Object.keys(cards);
 for (const name of pngs) inputs.push('-loop', '1', '-t', String(total), '-i', path.join(work, name + '.png'));
 const idx = (name) => segs.length + pngs.indexOf(name);
 const f = [];
 f.push(`[${idx('intro')}:v]trim=0:${INTRO},setpts=PTS-STARTPTS,fps=30,format=yuv420p[intro]`);
 f.push(`[${idx('outro')}:v]trim=0:${OUTRO},setpts=PTS-STARTPTS,fps=30,format=yuv420p[outro]`);
-segs.forEach((s, i) => f.push(`[${i}:v]setpts=(PTS-STARTPTS)/${s.k},fps=30,format=yuv420p[s${i}]`));
+// Each stretch plays at its speed in timeline time, whatever the recording's clock did meanwhile.
+segs.forEach((s, i) => f.push(`[${i}:v]setpts=(PTS-STARTPTS)*${(s.out / Math.max(0.001, s.vb - s.va)).toFixed(6)},fps=30,format=yuv420p,trim=0:${s.out.toFixed(3)}[s${i}]`));
 f.push(`[intro]${segs.map((_, i) => `[s${i}]`).join('')}[outro]concat=n=${segs.length + 2}:v=1:a=0[cut]`);
 let last = 'cut', n = 0;
 const over = (name, ranges) => {
@@ -144,4 +183,4 @@ const args = ['-y', '-hide_banner', '-loglevel', 'error', ...inputs, '-filter_co
 const r = spawnSync('ffmpeg', args, { stdio: 'inherit' });
 if (r.status !== 0) process.exit(r.status || 1);
 fs.writeFileSync(path.join(work, 'segments.json'), JSON.stringify({ length, total, segs, says }, null, 2));
-console.log(`${outFile}: ${total.toFixed(1)} s from ${length.toFixed(0)} s of recording, ${segs.filter((s) => s.k === 1).length} real-time stretches, fast-forward up to ${Math.max(...segs.map((s) => s.k))}×`);
+console.log(`${outFile}: ${total.toFixed(1)} s from ${videoLength.toFixed(0)} s of recording, ${segs.filter((s) => s.k === 1).length} real-time stretches, fast-forward up to ${Math.max(...segs.map((s) => s.k))}×`);
