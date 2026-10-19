@@ -82,6 +82,32 @@ class Tunnels:
         except Exception:  # noqa: BLE001 - anything but an answer means "not up"
             return None
 
+    async def missing_styles(self, s: "ProjectSession", port: int, timeout: float) -> list[str] | None:
+        """The page's own stylesheets that don't load yet (a page written before its CSS shows up as bare HTML).
+        None if the page itself doesn't answer."""
+        try:
+            _, client = await self.local_port(s, port)
+            h = {"host": f"127.0.0.1:{port}"}
+            r = await asyncio.wait_for(client.get("/", headers={**h, "accept": "text/html,*/*"}), timeout)
+            if r.status_code >= 400:
+                return None
+            if "html" not in r.headers.get("content-type", ""):
+                return []
+            missing = []
+            for tag in re.findall(r"<link\b[^>]*>", r.text, re.I)[:12]:
+                href = re.search(r"""href\s*=\s*["']?([^"' >]+)""", tag, re.I)
+                if not re.search(r"""rel\s*=\s*["']?stylesheet""", tag, re.I) or not href:
+                    continue
+                url = html.unescape(href.group(1))
+                if re.match(r"(?i)^([a-z][a-z0-9+.-]*:|//)", url):
+                    continue  # fonts and other sites: not the agent's to write
+                c = await asyncio.wait_for(client.get("/" + url.lstrip("./").split("#")[0], headers=h), timeout)
+                if c.status_code >= 400:
+                    missing.append(url)
+            return missing
+        except Exception:  # noqa: BLE001
+            return None
+
     async def close(self) -> None:
         for _, listener, _, client in self._t.values():
             with contextlib.suppress(Exception):

@@ -84,6 +84,26 @@ def test_requests_stay_put_when_they_mention_the_current_or_several_projects():
     assert parse("Add a web view to the android app", WEB, {"project": "pulse", "actions": {}}).name == "send_agent_task"
 
 
+DEMO = WEB + [{"id": "aurora", "name": "Aurora Lodge", "aliases": ["aurora", "aurora lodge", "website", "the website", "site"]}]
+
+
+@pytest.mark.parametrize("text,ctx,target", [
+    ("Build a beautiful modern website for Aurora Lodge, a glass cabin retreat", None, "aurora"),
+    ("build a website for aurora", "pulse", "aurora"),
+    ("Build me a landing page", "aurora", "web"),
+])
+def test_the_project_named_wins_over_a_generic_word(text, ctx, target):
+    """Two projects answer to "website": the one named (or matched by more of what was said) gets the request."""
+    i = parse(text, DEMO, {"project": ctx, "actions": {}, "default": "pulse"})
+    assert i.name == "open_project" and i.args["project"] == target
+
+
+def test_a_generic_word_stays_with_the_open_project_that_answers_to_it():
+    assert parse("Make the website feel more dramatic", DEMO, {"project": "aurora", "actions": {}}).name == "send_agent_task"
+    # Said from home with nothing to tell them apart: no guess between the two.
+    assert parse("build me a website", DEMO, {"project": None, "default": None}).name == "help"
+
+
 def test_outside_a_project_falls_back_to_the_default_project():
     i = parse("Add a dark mode toggle", WEB, {"project": None, "default": "pulse"})
     assert i.name == "open_project" and i.args == {"project": "pulse", "then": "Add a dark mode toggle"}
@@ -107,3 +127,20 @@ def test_navigation_by_meaning(text, name):
 def test_explaining_puts_a_diagram_on_screen(text):
     i = parse(text, WEB, {"project": "web", "actions": {}})
     assert i.name == "send_agent_task" and i.args["lane"] == "ui" and "diagram" in i.args["task"]
+
+
+PROD = WEB + [{"id": "aurora", "name": "Aurora Lodge", "aliases": ["aurora", "aurora lodge", "demo site"]}]
+
+
+@pytest.mark.parametrize("text,ctx,target", [
+    ("Make it more dramatic. Switch the whole site to a dark midnight theme", "aurora", None),
+    ("Make the website load faster", "aurora", None),
+    ("Build me a landing page", "aurora", "web"),
+    ("Build a new website for the bakery", "aurora", "web"),
+    ("Open web lab", "aurora", "web"),
+])
+def test_inside_a_project_generic_words_mean_this_project(text, ctx, target):
+    """Web Lab answers to "site" and "website", but inside Aurora Lodge "the whole site" is Aurora Lodge's."""
+    i = parse(text, PROD, {"project": ctx, "actions": {}, "default": "pulse"})
+    got = i.args.get("project") if i.name == "open_project" else None
+    assert got == target, (i.name, i.args)

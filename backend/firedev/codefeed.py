@@ -85,6 +85,10 @@ class CodeFeed:
             rel = name[2:] if name.startswith("./") else name
             self.seen[(s.project.id, rel)] = body.splitlines()
 
+    def forget(self, pid: str) -> None:
+        for k in [k for k in self.seen if k[0] == pid]:
+            del self.seen[k]
+
     async def capture(self, s: "ProjectSession", task_id: str | None, rel: str, change: str) -> None:
         # One file's edits are read back in order, so each diff is against the version before it.
         async with self.locks.setdefault((s.project.id, rel), asyncio.Lock()):

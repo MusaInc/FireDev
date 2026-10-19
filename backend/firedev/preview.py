@@ -38,6 +38,7 @@ log = logging.getLogger("firedev.preview")
 TICKET_TTL = 90.0
 SESSION_IDLE = 12 * 3600.0
 START_TIMEOUT = 120.0
+STYLES_GRACE = 90  # seconds a live build waits for the page's own stylesheets before showing it anyway
 INSTALL_TIMEOUT = 900.0
 PORT_BASE, PORT_SPAN = 5300, 600
 WEB_FILES = re.compile(r"\.(html?|css|scss|sass|less|jsx?|tsx?|mjs|cjs|vue|svelte|astro|mdx?|json|svg|png|jpe?g|webp|gif|ico)$", re.I)
@@ -480,6 +481,7 @@ class PreviewManager:
         await asyncio.sleep(1.0)  # let the first files land
         user_asked = task.source not in ("agent", "assistant")
         deadline = time.time() + START_TIMEOUT
+        styles_by = time.time() + STYLES_GRACE
         try:
             while time.time() < deadline and task.status in ("running", "queued", "waiting_approval", "completed"):
                 if p.status != "running":
@@ -495,8 +497,13 @@ class PreviewManager:
                 if p.status == "running" and p.port:
                     code = await self.probe(p.pid, p.port)
                     if code is not None and code < 400:
-                        break
-                    p.message = "Waiting for the first page…"
+                        # Not before its own stylesheets load: bare HTML says "broken", not "being built".
+                        missing = await self.missing_styles(p.pid, p.port)
+                        if not missing or task.status == "completed" or time.time() > styles_by:
+                            break
+                        p.message = f"Waiting for {posixpath.basename(missing[0])}…"
+                    else:
+                        p.message = "Waiting for the first page…"
                 elif p.status in ("failed", "native", "none") and task.status == "completed":
                     return
                 await asyncio.sleep(2)
@@ -522,6 +529,11 @@ class PreviewManager:
         if p.status == "running" and p.kind in ("web", "static") and self._live.get(p.pid) != task_id:
             self._live[p.pid] = task_id
             await self._go_live(p, task_id, "")
+
+    async def missing_styles(self, pid: str, port: int, timeout: float = 4.0) -> list[str] | None:
+        if not self.tunnels or not hasattr(self.tunnels, "missing_styles"):
+            return []
+        return await self.tunnels.missing_styles(self.service.sessions[pid], port, timeout)
 
     def gateway_available(self) -> bool:
         st = self.service.config.settings
@@ -920,6 +932,27 @@ class PreviewManager:
         p.status = "failed"
         p.message = _diagnose(p.log) or "The dev server didn't answer in time."
         self._emit(p)
+
+    async def reset(self, pid: str) -> None:
+        """Between demo takes: stop FireDev's own server for the project and forget everything seen, so the next
+        build is detected and goes live from scratch. The repository is not touched."""
+        for d in (self._starting, self._watchers, self._builds):
+            t = d.pop(pid, None)
+            if t:
+                t.cancel()
+        h = self._reload_at.pop(pid, None)
+        if h:
+            h.cancel()
+        for d in (self._live, self._reload_files, self._touched, self._before):
+            d.pop(pid, None)
+        p = self.previews[pid]
+        if p.managed and p.status in ("running", "starting", "failed"):
+            try:
+                await self.stop_server(pid)
+            except (RemoteError, OSError):
+                pass
+        self.previews[pid] = Preview(pid)
+        self._emit(self.previews[pid])
 
     async def stop_server(self, pid: str) -> Preview:
         p = self.previews[pid]

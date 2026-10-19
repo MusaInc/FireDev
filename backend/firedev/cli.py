@@ -13,7 +13,7 @@
   firedev status [project]          print project status
   firedev ui show <file>|back       put a generated screen (firedev.ui/1 JSON) on the TV, or go back one
   firedev mcp                       MCP over stdio (bridges to the running service)
-  firedev demo setup|reset          create or reset the broken sample project
+  firedev demo setup|reset [--project pulse|aurora]   create or reset a demo project
 """
 
 from __future__ import annotations
@@ -242,29 +242,39 @@ def cmd_mcp(args, c):
 
 
 DEMO_DIR = Path(os.environ.get("FIREDEV_DEMO_DIR", "~/firedev-demo")).expanduser()
+# Demo projects: project id -> (folder under DEMO_DIR, template in demo/, first commit, what's ready).
+DEMOS = {
+    "pulse": ("pulse", "pulse-android", "Pulse 1.2.0: weekly summary on the home screen", "Broken sample ready at {} (2 compile errors, 18 unit tests)."),
+    "aurora": ("aurora", "aurora-site", "Aurora Lodge: the brief and the site checks", "Empty Aurora Lodge project ready at {} (brief and checks only, no site yet)."),
+}
 
 
 def cmd_demo(args, c):
-    target = DEMO_DIR / "pulse"
-    src = ROOT / "demo" / "pulse-android"
-    if args.action == "reset" and (DEMO_DIR / "preview" / "server.pid").exists():
+    if args.project not in DEMOS:
+        sys.exit(f"No demo called {args.project}. Demos: {', '.join(DEMOS)}.")
+    folder, template, message, ready = DEMOS[args.project]
+    target = DEMO_DIR / folder
+    src = ROOT / "demo" / template
+    if args.project == "pulse" and args.action == "reset" and (DEMO_DIR / "preview" / "server.pid").exists():
         pid = (DEMO_DIR / "preview" / "server.pid").read_text().strip()
         subprocess.run(["kill", pid], capture_output=True)
         shutil.rmtree(DEMO_DIR / "preview", ignore_errors=True)
     if args.action == "reset":
-        # Stop anything still running for the demo (agent turns, builds) so the next take starts clean.
+        # Stop anything still running for the demo (agent turns, builds, its preview server) so the next take starts clean.
         session = c.projects[args.project].tmux_session if args.project in c.projects else f"firedev-{args.project}"
         subprocess.run(["tmux", "kill-session", "-t", f"={session}"], capture_output=True)
     if target.exists():
         if args.action == "setup":
-            sys.exit(f"{target} already exists. Use `firedev demo reset` to start it again from the broken state.")
+            sys.exit(f"{target} already exists. Use `firedev demo reset --project {args.project}` to start it again.")
         shutil.rmtree(target)
-    shutil.copytree(src, target, ignore=shutil.ignore_patterns(".gradle", "build", ".firedev", "local.properties"))
-    git = ["git", "-C", str(target), "-c", "user.name=Pulse Team", "-c", "user.email=team@pulse.example"]
+    shutil.copytree(src, target, ignore=shutil.ignore_patterns(".gradle", "build", ".firedev", "local.properties", "node_modules", "test-results"))
+    git = ["git", "-C", str(target), "-c", "user.name=Demo Team", "-c", "user.email=team@demo.example"]
     subprocess.run(["git", "init", "-q", "-b", "main", str(target)], check=True)
     subprocess.run([*git, "add", "-A"], check=True)
-    subprocess.run([*git, "commit", "-qm", "Pulse 1.2.0: weekly summary on the home screen"], check=True)
-    print(f"Broken sample ready at {target} (2 compile errors, 18 unit tests).")
+    subprocess.run([*git, "commit", "-qm", message], check=True)
+    print(ready.format(target))
+    if args.project in c.projects and Path(c.projects[args.project].path).expanduser() != target:
+        print(f"Note: the project {args.project} in your config points at {c.projects[args.project].path}, not {target}.")
     if args.action == "reset":
         try:
             _call(c, "POST", "/api/command", {"name": "reset_state", "args": {"project": args.project, "forget_thread": not args.keep_thread}})

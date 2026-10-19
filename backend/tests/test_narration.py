@@ -72,3 +72,42 @@ def test_written_shorthand_is_read_as_words():
     from firedev.speech import clean_for_speech
     said = clean_for_speech("Moved the nav, e.g. the header & footer -> layout.tsx, w/ new tests.")
     assert said == "Moved the nav, for example, the header and footer to layout.tsx, with new tests."
+
+
+def test_housekeeping_commands_are_not_narrated():
+    assert narration([], "Running pwd", playful=False) == ""
+    assert narration([], "Running git status --short", playful=False) == ""
+    assert narration([], "Running ./test.sh", playful=False) == "Now I'm running test.sh."
+
+
+def test_closing_reply_is_not_said_twice(tmp_path):
+    """The agent spoke its summary with `firedev say`; the end-of-task reply repeating it stays quiet."""
+    from test_preview import make_service
+    svc, _ = make_service(tmp_path)
+    s = svc.sessions["web"]
+    q = svc.bus.subscribe()
+    s.speak("All fourteen checks passed. Up top, the full-screen Arctic sky has slowly moving northern lights and a lit "
+            "cabin; below it, the page ends with a stay enquiry.", "progress", "t1", force=True)
+    again = ("All 14 checks passed, and the live preview is running. Let me walk you through it: the full-screen night sky "
+             "opens with slowly moving northern lights, a glowing cabin, and the larger headline.")
+    assert s._just_said(again, "t1")
+    assert not s._just_said(again, "t2"), "another task's reply still speaks"
+    assert not s._just_said("I fixed the build: a missing import in MainActivity.", "t1")
+    assert q.qsize() == 1
+
+
+def test_a_reply_right_after_the_agents_own_wrap_up_stays_quiet(tmp_path):
+    import time
+    from test_preview import make_service
+    svc, _ = make_service(tmp_path)
+    s = svc.sessions["web"]
+    s._agent_spoke = (time.time(), "t1")
+    assert s._just_said("Here's the tour, from sky to snowy ground.", "t1")
+    assert not s._just_said("Here's the tour, from sky to snowy ground.", "t2")
+    s._agent_spoke = (time.time() - 60, "t1")
+    assert not s._just_said("Here's the tour, from sky to snowy ground.", "t1")
+
+
+def test_search_patterns_are_not_read_aloud():
+    assert narration([], "Searching for “^(:root|\\.hero|”", playful=False) == "Now I'm searching the code."
+    assert narration([], "Searching for “hero”", playful=False) == "Now I'm searching for “hero”."

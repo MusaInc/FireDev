@@ -582,6 +582,32 @@ async def test_live_build_puts_the_page_on_the_tv_once_per_task(tmp_path, monkey
     assert offers() == []
 
 
+async def test_reset_between_takes_forgets_the_live_page(tmp_path, monkeypatch):
+    """`firedev demo reset`: FireDev's own server stops and the project is detected afresh, so the next build goes live
+    from scratch; the code feed forgets the files it saw."""
+    svc, _ = make_service(tmp_path)
+    m = svc.previews
+    p = m.previews["web"]
+    p.status, p.kind, p.managed, p.port = "running", "static", True, 5390
+    m._live["web"] = "t1"
+    m._reload_files["web"] = ["index.html"]
+    stopped = []
+
+    async def stop_server(pid):
+        stopped.append(pid)
+    monkeypatch.setattr(m, "stop_server", stop_server)
+    svc.code.seen[("web", "index.html")] = ["<h1>old</h1>"]
+    svc.code.seen[("pulse", "a.kt")] = ["x"]
+
+    async def reset_state(forget_thread):
+        return None
+    monkeypatch.setattr(svc.sessions["web"], "reset_state", reset_state)
+    await svc.execute("reset_state", {"project": "web"}, Client("cli", "CLI", "admin"))
+    assert stopped == ["web"]
+    assert m.previews["web"].status == "unknown" and "web" not in m._live and "web" not in m._reload_files
+    assert ("web", "index.html") not in svc.code.seen and ("pulse", "a.kt") in svc.code.seen
+
+
 def test_live_build_setting(tmp_path):
     svc, _ = make_service(tmp_path, project_preview={"live_build": False})
     assert not svc.previews._live_build("web")
@@ -664,3 +690,92 @@ async def test_more_work_on_a_live_page_shows_it_as_the_task_starts(tmp_path, mo
     got = await start(Task(id="t1", title="Make it more premium", kind="agent", status="running"))
     assert len(got) == 1 and got[0].data["live"] and got[0].task == "t1"
     assert await start(Task(id="t2", title="Tidy up", kind="agent", status="running", source="agent")) == []
+
+
+async def test_missing_styles_finds_the_pages_own_stylesheets_that_dont_load_yet():
+    """A page written before its CSS is bare HTML: the live view waits for its own stylesheets, never for fonts."""
+    from firedev.gateway import Tunnels
+    files = {"/": "<!doctype html><link rel=\"preconnect\" href=\"https://fonts.gstatic.com\">"
+                  "<link href=\"https://fonts.googleapis.com/css2?family=Fraunces\" rel=\"stylesheet\">"
+                  "<link rel=stylesheet href=\"styles.css\"><link rel=\"stylesheet\" href=\"./css/extra.css?v=2\">"}
+
+    def handler(req):
+        body = files.get(req.url.path)
+        return httpx.Response(404) if body is None else httpx.Response(200, text=body, headers={"content-type": "text/html" if req.url.path == "/" else "text/css"})
+    client = httpx.AsyncClient(base_url="http://127.0.0.1:1", transport=httpx.MockTransport(handler))
+    t = Tunnels.__new__(Tunnels)
+
+    async def local_port(s, port):
+        return 1, client
+    t.local_port = local_port
+    assert await t.missing_styles(None, 5000, 2) == ["styles.css", "./css/extra.css?v=2"]
+    files["/styles.css"] = files["/css/extra.css"] = "body{}"
+    assert await t.missing_styles(None, 5000, 2) == []
+    del files["/"]
+    assert await t.missing_styles(None, 5000, 2) is None
+
+
+async def test_live_build_waits_for_the_pages_stylesheet(tmp_path, monkeypatch):
+    from firedev.events import Event
+    from firedev.session import Task
+
+    svc, _ = make_service(tmp_path)
+    m = svc.previews
+    m.tunnels = object()
+    svc.config.settings.preview_port = 8132
+    p = m.previews["web"]
+    s = svc.sessions["web"]
+    s.current = Task(id="t1", title="Build a site", kind="agent", status="running")
+    styles = [["styles.css"], ["styles.css"], []]
+
+    async def refresh(pid, quiet=False):
+        return p
+
+    async def ensure_running(pid, source, **kw):
+        p.status, p.port = "running", 5390
+        return p
+
+    async def probe(pid, port, timeout=4.0):
+        return 200
+
+    async def missing_styles(pid, port, timeout=4.0):
+        return styles.pop(0) if styles else []
+    for name, fn in (("refresh", refresh), ("ensure_running", ensure_running), ("probe", probe), ("missing_styles", missing_styles)):
+        monkeypatch.setattr(m, name, fn)
+    monkeypatch.setattr(asyncio, "sleep", (lambda real: (lambda d, *a: real(0)))(asyncio.sleep))
+    p.kind, p.framework, p.status = "static", "static", "idle"
+    q = svc.bus.subscribe()
+    await m._on_event(Event(type="file_changed", project="web", task="t1", data={"path": "index.html"}))
+    for _ in range(60):
+        await asyncio.sleep(0)
+    offers = [ev for ev in iter(lambda: q.get_nowait() if not q.empty() else None, None) if ev.type == "preview_offer"]
+    assert styles == [] and len(offers) == 1, "on screen only once styles.css loads"
+
+
+async def test_reset_before_the_project_connects_still_forgets_the_agent_thread(tmp_path, monkeypatch):
+    """A reset straight after the service starts: the old thread saved on the machine must not come back on connect
+    (Codex would resume the last take: "Aurora Lodge is already built")."""
+    svc, _ = make_service(tmp_path)
+    s = svc.sessions["web"]
+    s.state_dir = str(tmp_path / "state")
+    saved = {"agent.json": json.dumps({"agent": s.adapter.id, "thread_id": "old-take", "brief": 4})}
+
+    class Remote:
+        connected = False
+
+        async def run(self, cmd):
+            return 0, saved["agent.json"], ""
+
+        async def write_file(self, path, text, mode=None):
+            saved["agent.json"] = text
+
+    async def nothing(*a, **kw):
+        return None
+    monkeypatch.setattr(s, "remote", Remote())
+    for name in ("cancel", "refresh_changes"):
+        monkeypatch.setattr(s, name, nothing)
+    await s.reset_state(forget_thread=True)
+    await s._load_agent_state()
+    assert s.agent_state["thread_id"] is None and json.loads(saved["agent.json"])["thread_id"] is None
+    await s._load_agent_state()  # later reconnects read what's saved again
+    assert s.agent_state["thread_id"] is None

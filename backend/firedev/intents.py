@@ -114,17 +114,31 @@ def _match_project(name: str, projects: list[dict]) -> dict | None:
     return best if best_score >= 0.5 else None
 
 
+# Aliases that describe a kind of work rather than one project: inside a project they mean that project.
+_GENERIC = {"site", "website", "web site", "the site", "the website", "page", "web page", "landing page", "web", "app",
+            "the app", "project", "demo site"}
+
+
 def mentioned_project(t: str, projects: list[dict], exclude: str | None = None) -> dict | None:
     """The one project a request is about, by its name or an alias said as words ("a landing page" -> the project
     with the alias "landing page"). None if no project, or more than one, is mentioned, or if [exclude] is."""
     hits = []
+    said = lambda n: n and re.search(r"(?<![a-z0-9])" + re.escape(n) + r"(?![a-z0-9])", t)
+    # Inside a project, "the whole site" is this project's site: a generic alias only moves you elsewhere when it's
+    # said as something new ("build me a landing page"). Naming another project, or a specific alias, always does.
+    said_new = lambda n: n and re.search(r"\b(a|an|new|another)\s+(\w+\s+){0,2}?" + re.escape(n) + r"(?![a-z0-9])", t)
     for p in projects:
-        names = {p["name"].lower(), *(a.lower() for a in p.get("aliases", []) or [])}
-        if any(n and re.search(r"(?<![a-z0-9])" + re.escape(n) + r"(?![a-z0-9])", t) for n in names):
-            hits.append(p)
-    if exclude is not None and any(p["id"] == exclude for p in hits):
+        # Its name counts double: "a website for Aurora Lodge" is Aurora Lodge's, even if another project is "website".
+        score = 2 * bool(said(p["name"].lower())) + sum(1 for a in {a.lower() for a in p.get("aliases", []) or []}
+                                                        if (said_new if exclude is not None and a in _GENERIC else said)(a))
+        if score:
+            hits.append((score, p))
+    if exclude is not None and any(p["id"] == exclude for _, p in hits):
         return None
-    return hits[0] if len(hits) == 1 else None
+    hits.sort(key=lambda h: -h[0])
+    if len(hits) > 1 and hits[0][0] == hits[1][0]:
+        return None
+    return hits[0][1] if hits else None
 
 
 def parse(text: str, projects: list[dict], context: dict | None = None) -> Intent:
@@ -184,7 +198,7 @@ def parse(text: str, projects: list[dict], context: dict | None = None) -> Inten
             target, kind = _target(what)
             return Intent("ui_edit", f"{op.capitalize()} {what}", {"op": op, "target": target, "kind": kind, "task": text.strip()})
         if _UI_MODIFY.match(t):
-            return Intent("ui_edit", _title(t), {"task": text.strip()})
+            return Intent("ui_edit", _title(t, text), {"task": text.strip()})
     if _UNDO.search(t):
         return Intent("undo_changes", "Undo the last change")
     if _STATUS.match(t):
@@ -206,12 +220,12 @@ def parse(text: str, projects: list[dict], context: dict | None = None) -> Inten
         return Intent("send_agent_task", "Show it on screen", {"task": "Show what we were just talking about on the TV.",
                                                                 "mode": "present", "lane": "ui", "any_project": not ctx.get("project")})
     if _EXPLAIN_HOW.match(t):
-        return Intent("send_agent_task", _title(t), {
+        return Intent("send_agent_task", _title(t, text), {
             "task": f"{text.strip()} Explain it visually: put a diagram on the TV (a graph with short node labels and the real "
                     "components and how they connect, from the actual code), with a sentence or two of explanation beside it.",
             "mode": "present", "lane": "ui", "any_project": not ctx.get("project")})
     if _PRESENT.match(t) and not _DIFF.search(t) and not _ACTIVITY.search(t):
-        return Intent("send_agent_task", _title(_AGENT_PREFIX.sub("", t)), {"task": text.strip(), "mode": "present", "lane": "ui",
+        return Intent("send_agent_task", _title(_AGENT_PREFIX.sub("", t), text), {"task": text.strip(), "mode": "present", "lane": "ui",
                                                                              "any_project": not ctx.get("project")})
     if not ctx.get("project"):
         # Outside a project FireDev picks one itself: the one named, the one the request is about, or the default.
@@ -272,19 +286,21 @@ def parse(text: str, projects: list[dict], context: dict | None = None) -> Inten
             steps.append("When the fix is in, build with `firedev run build`.")
         else:
             steps.append("Check your fix with `firedev run build` or `firedev run test`.")
-        title = f"Fix {what}" if what and re.search(r"\bfix (it|this|that|them)\b", t) else _title(request)
+        title = f"Fix {what}" if what and re.search(r"\bfix (it|this|that|them)\b", t) else _title(request, text)
         if _AND_TESTS.search(t):
             title += " and run tests"
         return Intent("send_agent_task", title, {"task": " ".join(steps), "mode": "change"})
     if _EXPLAIN_THAT.match(t):
         return Intent("send_agent_task", "Explain that", {"task": text.strip(), "mode": "answer"})
     if _QUESTION.match(request):
-        return Intent("send_agent_task", _title(request), {"task": text.strip(), "mode": "answer"}, confidence=0.8)
-    return Intent("send_agent_task", _title(request), {"task": text.strip(), "mode": "change"}, confidence=0.8)
+        return Intent("send_agent_task", _title(request, text), {"task": text.strip(), "mode": "answer"}, confidence=0.8)
+    return Intent("send_agent_task", _title(request, text), {"task": text.strip(), "mode": "change"}, confidence=0.8)
 
 
-def _title(request: str) -> str:
-    r = request.strip().rstrip(".?!")
+def _title(request: str, said: str = "") -> str:
+    # The request was matched lower-cased; give names back the capitals they were said with ("Aurora Lodge").
+    cased = {w.lower(): w for w in re.findall(r"[\w'’-]+", said)}
+    r = re.sub(r"[\w'’-]+", lambda m: cased.get(m.group(0), m.group(0)), request).strip().rstrip(".?!")
     r = re.sub(r"^(please|can you|could you)\s+", "", r, flags=re.I)
     if not r:
         return "New task"

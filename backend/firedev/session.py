@@ -40,6 +40,8 @@ TAIL_BYTES = 48_000
 ACTIVITY_LIMIT = 160
 SURFACE_HISTORY = 8
 PROGRESS_GAP = 6.0  # seconds between spoken progress lines
+WRAP_UP_WINDOW = 15.0  # the agent spoke for itself this close to the end: that was its wrap-up
+REPEAT_WINDOW = 45.0  # seconds in which a closing reply that repeats what the agent just said stays quiet
 NARRATE_QUIET = 20.0  # while the agent works, the TV says what it's been doing after this long without speaking
 NARRATE_CHECK = 4.0
 ACK_AFTER = 1.5  # an agent's first message is spoken as its acknowledgement if the turn is still going this long after
@@ -130,6 +132,7 @@ class ProjectSession:
         self.connected_evt = asyncio.Event()
         self.path = project.path
         self.state_dir = ""
+        self._forget_thread = False
         self.queue_dir = ""
         self.agent_state = {"id": self.adapter.id, "name": self.adapter.display, "state": "offline", "version": None, "thread_id": None}
         self.tasks: deque[Task] = deque(maxlen=30)
@@ -154,6 +157,8 @@ class ProjectSession:
         self.surface_stack: list[dict] = []
         self.conversation: deque[dict] = deque(maxlen=80)
         self._last_speech: tuple[float, str] = (0.0, "")
+        self._said: list[tuple[float, str | None, str]] = []
+        self._agent_spoke: tuple[float, str | None] = (0.0, None)  # the agent's own last `firedev say`
         self._load_surface()
         self._bg: set[asyncio.Task] = set()
         self._opening: asyncio.Task | None = None
@@ -212,6 +217,8 @@ class ProjectSession:
             if now - last_ts < PROGRESS_GAP:
                 return False
         self._last_speech = (now, text)
+        self._said.append((now, task_id, text))
+        del self._said[:-6]
         self.bus.emit("agent_speech", self.project.id, task_id, id=_rid("s"), text=text, kind=kind, agent=self.adapter.display)
         return True
 
@@ -399,6 +406,11 @@ class ProjectSession:
                               detail=(err or out).strip()[:200], level=None)
 
     async def _load_agent_state(self) -> None:
+        if self._forget_thread:
+            self._forget_thread = False
+            self.agent_state["thread_id"] = None
+            await self._save_agent_state()
+            return
         code, out, _ = await self.remote.run(f"cat {shlex.quote(self.state_dir)}/agent.json 2>/dev/null")
         if code == 0:
             try:
@@ -890,12 +902,27 @@ class ProjectSession:
             self.add_activity("task-end", {"completed": "Task complete", "cancelled": "Task stopped"}.get(task.status, "Task failed"),
                               detail=task.summary or task.error or "", task=task.id, status="done" if task.status == "completed" else "failed")
 
+    def _just_said(self, text: str, task_id: str) -> bool:
+        """The agent already said this a moment ago (`firedev say` with its summary), or its own words just wrapped
+        the task up: don't say it twice."""
+        ts, tid = self._agent_spoke
+        if tid == task_id and time.time() - ts < WRAP_UP_WINDOW:
+            return True
+        words = lambda t: {w for w in re.findall(r"[a-z0-9]+", t.lower()) if len(w) > 3}
+        new = words(text)
+        for ts, tid, old in self._said:
+            if tid == task_id and time.time() - ts < REPEAT_WINDOW and new:
+                if len(new & words(old)) / len(new) >= 0.4:
+                    return True
+        return False
+
     def _speak_outcome(self, task: Task) -> None:
         voiced = task.source in ("tv", "voice", "assistant", "cli", "admin")
         if task.kind == "agent":
             if task.status == "completed":
                 said = spoken_text(task.summary) or "Done."
-                self.speak(said, "reply", task.id)
+                if not self._just_said(said, task.id):
+                    self.speak(said, "reply", task.id)
                 self.add_turn("agent", task.summary or said, kind="reply", task=task.id)
             elif task.status == "cancelled":
                 self.speak("Stopped.", "reply", task.id)
@@ -1191,6 +1218,8 @@ class ProjectSession:
             if kind == "say":
                 text = (req.get("command") or "").strip()
                 if self.speak(text, "progress", tid):
+                    if len(text.split()) >= 18:  # a real wrap-up, not "running the tests now"
+                        self._agent_spoke = (time.time(), tid)
                     self.add_turn("agent", clean_for_speech(text), kind="progress", task=tid)
                     state = "done said on the TV"
                 else:
@@ -1386,6 +1415,8 @@ class ProjectSession:
             self.agent_state["thread_id"] = None
             if self.remote.connected:
                 await self._save_agent_state()
+            else:
+                self._forget_thread = True  # the saved thread is read on connect: drop it then
         await self.refresh_changes()
         self.service.state_changed(self.project.id)
 

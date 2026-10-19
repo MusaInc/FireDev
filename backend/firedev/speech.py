@@ -83,6 +83,11 @@ NOW = ["Now I'm {x}.", "Next up: {x}.", "Right now I'm {x}."]
 GOOD_NEWS = ["Nice.", "Green across the board.", "Not bad for a TV."]
 
 
+# Housekeeping not worth saying out loud ("Now I'm running pwd").
+_CHORE = re.compile(r"Running (pwd|ls|cd|cat|echo|sed|head|tail|find|rg|grep|wc|which|date|true|stat|tree|nl|"
+                    r"git (status|diff|log|show|rev-parse|ls-files))\b")
+
+
 def narration(activity: list[dict], now: str = "", *, playful: bool = True, rng: random.Random | None = None) -> str:
     """What the agent has been doing since it last spoke, said in its own voice ("I've created index.html and
     script.js. Now I'm editing styles.css."), so a long piece of work never goes quiet. Empty when there's nothing new.
@@ -115,7 +120,10 @@ def narration(activity: list[dict], now: str = "", *, playful: bool = True, rng:
         if ok and playful and rng.random() < 0.5:
             out += " " + rng.choice(GOOD_NEWS)
     step = re.sub(r"[.…]+$", "", (now or "").strip())
+    # A search pattern read aloud is noise ("searching for ^(:root|\.hero…"): just say what it's doing.
+    step = re.sub(r"^Searching for .*[\\^$|()\[\]*+?{}].*$", "Searching the code", step)
     # The agent's own steps ("Editing script.js…"), not FireDev's ("Waiting to start", "Asking Codex…").
-    if step and step.split(" ", 1)[0].endswith("ing") and not re.match(r"(Waiting|Asking|Reconnecting|Starting)\b", step):
+    if step and step.split(" ", 1)[0].endswith("ing") and not re.match(r"(Waiting|Asking|Reconnecting|Starting)\b", step) \
+            and not _CHORE.match(step):
         out = (out + " " + pick(NOW).format(x=step[0].lower() + step[1:])).strip()
     return clean_for_speech(out.replace("’", "'"))

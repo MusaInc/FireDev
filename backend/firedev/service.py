@@ -485,6 +485,8 @@ class FireDev:
             raise CommandError("Only the FireDev CLI can reset a project")
         s = self.session(args.get("project"))
         await s.reset_state(forget_thread=bool(args.get("forget_thread")))
+        await self.previews.reset(s.project.id)
+        self.code.forget(s.project.id)
         return {"ok": True, "message": f"Reset {s.project.name}"}
 
     async def _cmd_voice_link(self, args, client):
