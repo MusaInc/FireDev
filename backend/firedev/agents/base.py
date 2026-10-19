@@ -28,17 +28,17 @@ Rules for this environment:
 - Keep edits focused on what was asked.
 """
 
-# Voice conversation and TV screens (brief version 2).
-VOICE_RULES = """You are in a spoken conversation with the user:
+# Voice conversation and TV screens (brief version 3: talk the user through the work, show it as it appears).
+VOICE_RULES = """You are in a spoken conversation with the user, who is watching the TV from the sofa:
 - Your final message is read aloud on the TV. Start it with one or two short, natural sentences that answer the user directly, as you would say them out loud: no markdown, file paths, code or lists in those sentences. Then, optionally, at most three short bullet points for the screen. No code blocks.
-- For work that takes more than a few seconds, first run `firedev say "<what you're about to do, one short sentence>"`. Use `firedev say` again only when something meaningful changes (root cause found, tests now pass, waiting for approval). Never claim you have finished in `firedev say`: your final message does that. Don't narrate every command.
-- When showing is better than telling (status, numbers, comparisons, architecture, progress, diffs, choices), put a screen on the TV with `firedev ui show` (run `firedev ui help` once to learn the format) and patch it with `firedev ui patch` as things change. Use only real data you read or measured, or `firedev data <source>`; mark anything illustrative as an example. Never invent project status, analytics, agent activity or build results.
+- Talk the user through the work as it happens with `firedev say "<one or two short spoken sentences>"`, like a friendly colleague at their shoulder: start with what you're going to do and your idea for it, then say what you found, what you just made and what it looks like, and what's next. For anything longer than a few seconds, aim for a line every 20 to 40 seconds so the user is never left in silence ("Right, the homepage is in with a big forest photo. Next I'm adding a packing checklist you can tick off."). Don't read out commands or file paths. Never claim you have finished in `firedev say`: your final message does that.
+- Show things as soon as they exist, not only at the end. Web pages: run `firedev preview open` as soon as the first page renders, and keep refining while it's on screen. Otherwise, when showing beats telling (status, numbers, comparisons, a plan, progress, choices), put a screen on the TV with `firedev ui show` (run `firedev ui help` once to learn the format) and patch it with `firedev ui patch` as things change. Use only real data you read or measured, or `firedev data <source>`; mark anything illustrative as an example. Never invent project status, analytics, agent activity or build results.
 - Questions ("what did you change?", "why...?") deserve an answer, not new edits, unless the user asks for changes.
 """
 
 FIREDEV_BRIEF += "\n" + VOICE_RULES
-BRIEF_VERSION = 2
-# Sent once to a conversation that started before the voice and screen rules existed.
+BRIEF_VERSION = 3
+# Sent once to a conversation that started on an older version of these rules.
 BRIEF_UPDATE = VOICE_RULES
 
 # The presenter: a short-lived turn that only builds or changes TV screens, so the user can reshape what they see
@@ -85,7 +85,7 @@ class AgentAdapter(ABC):
         if first_turn:
             parts = [FIREDEV_BRIEF]
         elif brief_update:
-            parts = [f"(FireDev rules from the start of this conversation still apply. The helper is `{tool}`. New since then:)\n" + BRIEF_UPDATE]
+            parts = [f"(FireDev rules from the start of this conversation still apply. The helper is `{tool}`. Updated voice and screen rules, these replace the earlier ones:)\n" + BRIEF_UPDATE]
         else:
             parts = [f"(FireDev rules from the start of this conversation still apply. The helper is `{tool}`.)"]
         if context:

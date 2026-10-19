@@ -36,6 +36,7 @@ class MainActivity : Activity() {
     private lateinit var webView: WebView
     private lateinit var settings: ServerSettings
     private var speech: SpeechInput? = null
+    private lateinit var voice: SpeechOutput
     private lateinit var connection: Connection
     private var discovery: Discovery? = null
     private val main = Handler(Looper.getMainLooper())
@@ -58,6 +59,7 @@ class MainActivity : Activity() {
         connection = Connection(getSharedPreferences("firedev", MODE_PRIVATE), ::emit)
         connection.start()
         speech = SpeechInput.create(this, ::emit)
+        voice = SpeechOutput(this, ::emit)
 
         if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true)
         webView = WebView(this).apply {
@@ -119,6 +121,7 @@ class MainActivity : Activity() {
     override fun onPause() {
         emit(JSONObject().put("type", "lifecycle").put("state", "pause"))
         speech?.stop()
+        voice.stop()
         webView.onPause()
         super.onPause()
     }
@@ -127,6 +130,7 @@ class MainActivity : Activity() {
         discovery?.stop()
         connection.transport?.close()
         speech?.destroy()
+        voice.destroy()
         webView.destroy()
         super.onDestroy()
     }
@@ -203,6 +207,8 @@ class MainActivity : Activity() {
             }
         }.let { }
         @JavascriptInterface fun stopSpeech() = main.post { speech?.stop() }.let { }
+        @JavascriptInterface fun speak(id: String, text: String) = voice.speak(id, text)
+        @JavascriptInterface fun stopSpeaking() = voice.stop()
         @JavascriptInterface fun attention() = main.post {
             runCatching { ToneGenerator(AudioManager.STREAM_NOTIFICATION, 40).startTone(ToneGenerator.TONE_PROP_ACK, 160) }
         }.let { }

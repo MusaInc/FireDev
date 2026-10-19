@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING
 from . import genui, parsers, risk
 from .agents import make_adapter
 from .agents.base import BRIEF_VERSION
-from .speech import clean_for_speech, spoken_text
+from .speech import clean_for_speech, narration, spoken_text
 from .config import Action, Project
 from .ssh import RemoteError, make_remote
 
@@ -40,6 +40,8 @@ TAIL_BYTES = 48_000
 ACTIVITY_LIMIT = 160
 SURFACE_HISTORY = 8
 PROGRESS_GAP = 6.0  # seconds between spoken progress lines
+NARRATE_QUIET = 20.0  # while the agent works, the TV says what it's been doing after this long without speaking
+NARRATE_CHECK = 4.0
 ACK_AFTER = 1.5  # an agent's first message is spoken as its acknowledgement if the turn is still going this long after
 
 
@@ -651,6 +653,26 @@ class ProjectSession:
             task.spoke = True
             self.add_turn("agent", said, kind="progress", task=task.id)
 
+    async def _narrate(self, run: Run, task: Task) -> None:
+        """No long silences while the agent works: when it hasn't spoken for a while, the TV says what it has done
+        since (files written, what it read, test and build results) and what it's on now, in the agent's voice."""
+        since, said_step = time.time(), ""
+        while not run.done.is_set():
+            try:
+                await asyncio.wait_for(run.done.wait(), NARRATE_CHECK)
+                return
+            except asyncio.TimeoutError:
+                pass
+            if task.status != "running" or time.time() - self._last_speech[0] < NARRATE_QUIET:
+                continue
+            new = [a for a in self.activity if a["ts"] > since and a.get("task") == task.id]
+            step = task.status_text if task.status_text != said_step else ""
+            line = narration(new, step)
+            since = time.time()
+            if line and self.speak(line, "progress", task.id):
+                said_step = task.status_text
+                self.add_turn("agent", line, kind="progress", task=task.id)
+
     def _on_presenter_event(self, run: Run, task: Task | None, ev: dict) -> None:
         """The presenter's turn: it only builds screens, so it never touches the main conversation's state."""
         k = ev["kind"]
@@ -919,6 +941,7 @@ class ProjectSession:
         run = await self.start_run(kind="agent", title=task.title, command=command, level=1, source=task.source, task=task)
         if first or update:
             self.agent_state["brief"] = BRIEF_VERSION
+        self._spawn(self._narrate(run, task))
         await run.done.wait()
         if task.cancelled:
             return
