@@ -72,7 +72,7 @@ Away from home with a computer behind a home router: the TV needs either an SSH 
 (Tailscale, ZeroTier, WireGuard) so the computer looks local. FireDev has no relay of its own, by design.
 
 Afterwards the TV reconnects by itself: it keeps the machine, the pinned certificate or host key, and its own SSH key
-(in the Android keystore where the TV has one). Home → the connection card changes or forgets the machine.
+(in the Android keystore where the TV has one). Projects (say "show my projects") → the connection card changes or forgets the machine.
 
 Inside the TV app everything the interface does goes to `127.0.0.1` relays that the app carries over that TLS or SSH
 connection, live previews included (their own port, their own origin). See [docs/LOCAL_FIRST.md](docs/LOCAL_FIRST.md).

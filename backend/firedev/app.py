@@ -304,6 +304,9 @@ def create_app(config: Config, devices: DeviceStore) -> FastAPI:
                 await websocket.send_text(json.dumps(ev.to_dict(), default=str))
 
         sender = asyncio.create_task(pump())
+        link = f"{client.id}:{id(websocket)}"
+        if client.role == "voice":
+            service.voice_link(link, client.name)
         try:
             while True:
                 msg = json.loads(await websocket.receive_text())
@@ -330,6 +333,8 @@ def create_app(config: Config, devices: DeviceStore) -> FastAPI:
         finally:
             sender.cancel()
             service.bus.unsubscribe(q)
+            if client.role == "voice":
+                service.voice_link(link, None)
 
     async def _reply(websocket: WebSocket, client: Client, msg: dict):
         try:

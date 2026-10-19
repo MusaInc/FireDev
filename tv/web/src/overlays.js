@@ -221,20 +221,10 @@ export class Overlays {
     const d = ev.data || {};
     if (this.approval && ev.type !== 'voice_reply') return;
     // In a spoken conversation on the TV the dock (or the screen's rail) shows this instead of the sheet.
-    if (this.app.voice.active && (!d.source || d.source === 'tv') && !this.isOpen('voice')) {
-      if (ev.type === 'voice_reply') {
-        if (d.intent && ['show_changes', 'show_activity', 'go_home'].indexOf(d.intent) >= 0) this.navigateFor(d.intent);
-        if (d.intent === 'approve_action') this.focusApprove();
-      }
-      if (ev.type === 'voice_command') {
-        const it = d.intent || {};
-        if (it.name === 'open_project' && it.args && it.args.project && this.app.route.project !== it.args.project) {
-          this.app.focusProject = it.args.project;
-          this.app.navigate('workspace', { project: it.args.project });
-        }
-      }
-      return;
-    }
+    // Where to go is the director's job (director.js); this only shows what was heard and understood.
+    if (this.app.voice.active && (!d.source || d.source === 'tv') && !this.isOpen('voice')) return;
+    // Home is the voice screen: its orb and sentence show the conversation, no sheet on top.
+    if (this.app.route.name === 'home' && !this.isOpen('voice')) return;
     clearTimeout(this.voiceTimer);
     if (ev.type === 'voice_listening') {
       if (!d.active) { if (this.voice && this.voice.mode !== 'menu') this.close('voice'); return; }
@@ -259,18 +249,13 @@ export class Overlays {
       this.setVoiceState('understood', 'Understood' + (d.source && d.source !== 'tv' ? '  ·  ' + sourceName(d.source) : ''));
       clear(v.words).append('“' + d.text + '”');
       const it = d.intent || {};
-      if (it.name === 'open_project' && it.args && it.args.project && this.app.route.project !== it.args.project) {
-        this.app.focusProject = it.args.project;
-        this.app.navigate('workspace', { project: it.args.project });
-      }
       clear(v.intent).append(icon('check', 'ok'), h('b', null, it.title || ''), it.name === 'send_agent_task' && d.agent ? h('span.pill', null, 'Agent: ' + d.agent) : null);
       if (this.voice.mode === 'menu') { this.voice.mode = 'remote'; this.restack(); }
       this.voiceTimer = setTimeout(() => this.close('voice'), 4200);
       return;
     }
     if (ev.type === 'voice_reply') {
-      if (d.intent && ['show_changes', 'show_activity', 'go_home', 'approval'].indexOf(d.intent) >= 0) this.navigateFor(d.intent);
-      if (d.intent === 'approve_action') { this.focusApprove(); return; }
+      if (d.intent === 'approve_action') return;
       const v = this.voice;
       if (v && d.reply) {
         v.intent.appendChild(h('span.muted', { style: 'margin-left:12px' }, '— ' + d.reply));
@@ -280,13 +265,6 @@ export class Overlays {
       }
       this.voiceTimer = setTimeout(() => this.close('voice'), d.ok ? 3000 : 5000);
     }
-  }
-
-  navigateFor(intent) {
-    const pid = this.app.route.project || this.app.focusProject;
-    if (intent === 'show_changes' && pid) this.app.navigate('diff', { project: pid });
-    if (intent === 'show_activity' && pid) this.app.navigate('activity', { project: pid });
-    if (intent === 'go_home') this.app.navigate('home', { preselect: pid });
   }
 
   focusApprove() {

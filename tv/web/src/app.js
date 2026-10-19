@@ -10,6 +10,7 @@ import { createLink } from './net.js';
 import { native } from './native.js';
 import { clear, h } from './util.js';
 import { HomeScreen } from './screens/home.js';
+import { ProjectsScreen } from './screens/projects.js';
 import { WorkspaceScreen } from './screens/workspace.js';
 import { ActivityScreen } from './screens/activity.js';
 import { DiffScreen } from './screens/diff.js';
@@ -20,8 +21,9 @@ import { ConnectScreen } from './screens/connect.js';
 import { createPreview } from './preview.js';
 import { Overlays } from './overlays.js';
 import { createVoice } from './voice.js';
+import { createDirector } from './director.js';
 
-const SCREENS = { home: HomeScreen, workspace: WorkspaceScreen, activity: ActivityScreen, diff: DiffScreen, center: CenterScreen, surface: SurfaceScreen, preview: PreviewScreen, connect: ConnectScreen };
+const SCREENS = { home: HomeScreen, projects: ProjectsScreen, workspace: WorkspaceScreen, activity: ActivityScreen, diff: DiffScreen, center: CenterScreen, surface: SurfaceScreen, preview: PreviewScreen, connect: ConnectScreen };
 
 export function createApp() {
   const stage = document.getElementById('stage');
@@ -39,6 +41,7 @@ export function createApp() {
     projects: {},
     approvals: [],
     focusProject: null,
+    heard: null, // the latest words from any microphone: { state: listening | understood | ready, text, at }
     route: { name: 'center' },
     screen: null,
     config: native.config(),
@@ -74,6 +77,7 @@ export function createApp() {
   app.overlays = new Overlays(app);
   app.voice = createVoice(app);
   app.preview = createPreview(app);
+  app.director = createDirector(app);
 
   // --- rendering -----------------------------------------------------------------------------------------
   let frame = 0;
@@ -147,7 +151,8 @@ export function createApp() {
   /** Navigation targets used by voice replies and generated screens. */
   app.go = function (to, pid) {
     pid = pid || app.route.project || app.focusProject;
-    if (to === 'home') return app.navigate('home', { preselect: pid });
+    if (to === 'home') return app.navigate('home');
+    if (to === 'projects') return app.navigate('projects', { preselect: pid });
     if (!pid) return null;
     if (to === 'surface') return app.route.name === 'surface' && app.route.project === pid ? null : app.navigate('surface', { project: pid });
     if (to === 'activity') return app.navigate('activity', { project: pid });
@@ -160,13 +165,6 @@ export function createApp() {
     }
     return null;
   };
-
-  function surfaceArrived(pid, fromVoice) {
-    const here = app.route.project || app.focusProject;
-    if (pid !== here || app.overlays.approval) return;
-    // A new screen takes over the workspace and its own screen; it never pulls you out of a diff or the activity.
-    if (app.route.name === 'workspace' || app.route.name === 'surface' || fromVoice) app.go('surface', pid);
-  }
 
   // --- server messages -----------------------------------------------------------------------------------
   function onMessage(msg) {
@@ -219,10 +217,9 @@ export function createApp() {
       const first = !app.everOnline;
       app.everOnline = true;
       if (first || app.route.name === 'center') {
-        const single = app.home.projects.length === 1 ? app.home.projects[0].id : null;
-        const resume = app.focusProject || msg.focus;
-        if (resume && app.projects[resume] && app.projects[resume].connection === 'connected') app.openProject(resume);
-        else app.navigate('home', { preselect: single });
+        // Always start at the minimal home; the conversation takes it from there (and remembers the last project).
+        app.focusProject = app.focusProject || msg.focus || null;
+        app.navigate('home');
       } else {
         app.toast('Back online', 'ok');
       }
@@ -245,7 +242,7 @@ export function createApp() {
     switch (ev.type) {
       case 'ui_surface':
         app.ui.surfaces[ev.project] = { surface: d.surface, version: d.version };
-        surfaceArrived(ev.project, false);
+        app.director.surface(ev.project);
         break;
       case 'ui_patch':
         app.ui.surfaces[ev.project] = { surface: d.surface, version: d.version, patch: { base: d.base, changed: d.changed || [] } };
@@ -280,7 +277,8 @@ export function createApp() {
       case 'voice_reply':
         if (d.speech === 'stop') app.voice.stop();
         if (d.listen === 'off') app.voice.end();
-        if (d.navigate && ['surface', 'terminal', 'workspace'].indexOf(d.navigate) >= 0) app.go(d.navigate, ev.project);
+        if (app.heard && app.heard.state === 'understood') app.heard = null;
+        app.director.reply(ev);
         if (d.client_action && d.client_action.type === 'preview') app.preview.clientAction(d.client_action, ev.project);
         else if (d.client_action && app.route.name === 'surface' && app.screen.clientAction) app.screen.clientAction(d.client_action);
         app.overlays.voiceEvent(ev);
@@ -288,7 +286,13 @@ export function createApp() {
       case 'voice_listening':
       case 'voice_partial':
       case 'voice_command':
+        app.heard = ev.type === 'voice_listening' ? (d.active ? { state: 'listening', text: '', at: Date.now() } : null)
+          : { state: ev.type === 'voice_command' ? 'understood' : 'listening', text: d.text || '', at: Date.now() };
+        if (ev.type === 'voice_command') app.director.command(ev);
         app.overlays.voiceEvent(ev);
+        break;
+      case 'voice_link':
+        app.home.voice_links = d.links || [];
         break;
       case 'build_finished':
       case 'deploy_finished':
@@ -333,6 +337,7 @@ export function createApp() {
 
   // --- input ---------------------------------------------------------------------------------------------
   createInput((action, down) => {
+    if (down) app.director.key();
     if (app.focus.key(action, down)) return;
     if (action === 'select') { if (down) app.focus.select(); return; }
     if (!down) return;

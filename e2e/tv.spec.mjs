@@ -27,11 +27,20 @@ async function waitFor(page, fn, arg, timeout = 30000) {
 }
 async function toWorkspace(page) {
   if ((await route(page)) !== 'workspace') {
-    if ((await route(page)) !== 'home') await press(page, 'Escape');
+    if ((await route(page)) !== 'home' && (await route(page)) !== 'projects') await press(page, 'Escape');
+    if ((await route(page)) === 'home') await toProjects(page);
     await expect.poll(() => focused(page)).toBe('project-' + PID);
     await press(page, 'Enter');
   }
   await waitFor(page, (pid) => { const p = window.__firedev.projects[pid]; return p && p.connection === 'connected' && p.agent.state === 'ready'; }, PID);
+}
+async function toProjects(page) {
+  // Home is the voice screen; the projects list sits below "Start talking".
+  await expect.poll(() => focused(page)).toBe('talk');
+  await press(page, 'ArrowDown');
+  expect(await focused(page)).toBe('projects');
+  await press(page, 'Enter');
+  expect(await route(page)).toBe('projects');
 }
 async function idle(page) {
   await waitFor(page, (pid) => { const p = window.__firedev.projects[pid]; return p && !p.task && !(p.queue || []).length; }, PID, 60000);
@@ -39,22 +48,30 @@ async function idle(page) {
 
 test.describe.configure({ mode: 'serial' });
 
-test('home shows the project card with a visible focus and D-pad moves between cards', async ({ page }) => {
+test('home is the voice screen: an orb, one sentence and Start talking, with the projects one step away', async ({ page }) => {
   await open(page);
   expect(await route(page)).toBe('home');
+  await expect(page.locator('.home .orb')).toBeVisible();
+  await expect(page.locator('.home-line')).toContainText('What shall we build?');
+  expect(await focused(page)).toBe('talk');
+  await expect(page.locator('.btn.talk.is-focused')).toHaveCSS('background-color', 'rgb(244, 241, 234)');
+  await expect(page.locator('.project-card')).toHaveCount(0);
+  await toProjects(page);
   await expect(page.locator('.project-card')).toContainText('Fixture App');
   await expect(page.locator('.project-card')).toContainText('test-box');
   await expect(page.locator('.project-card')).toContainText('Codex');
   expect(await focused(page)).toBe('project-' + PID);
-  await expect(page.locator('.project-card.is-focused')).toHaveCSS('background-color', 'rgb(244, 241, 234)');
   await press(page, 'ArrowRight');
   expect(await focused(page)).toBe('phone-mic');
   await press(page, 'ArrowLeft');
   expect(await focused(page)).toBe('project-' + PID);
+  await press(page, 'Escape');
+  expect(await route(page)).toBe('home');
 });
 
 test('OK opens the project: SSH, tmux and agent come up and the workspace shows it', async ({ page }) => {
   await open(page);
+  await toProjects(page);
   await press(page, 'Enter');
   expect(await route(page)).toBe('workspace');
   await toWorkspace(page);
@@ -62,10 +79,10 @@ test('OK opens the project: SSH, tmux and agent come up and the workspace shows 
   await expect(page.locator('.topbar')).toContainText('test-box');
   await expect(page.locator('.task-card')).toContainText('What should Codex do?');
   expect(await focused(page)).toBe('task');
-  // Back returns to the projects, with the card still selected.
+  // Back returns to the voice home.
   await press(page, 'Escape');
   expect(await route(page)).toBe('home');
-  expect(await focused(page)).toBe('project-' + PID);
+  expect(await focused(page)).toBe('talk');
 });
 
 test('menu opens the voice sheet; a quick command runs the tests and shows the result', async ({ page }) => {
@@ -341,6 +358,35 @@ test('the phone microphone page sends words that the TV shows, and can never app
   expect(denied.ok).toBeFalsy();
   await tv.keyboard.press('Enter'); // Reject is focused
   await expect(tv.locator('.approval')).toHaveCount(0);
+  await phone.close();
+  await tv.close();
+});
+
+test('nobody touches the remote: what you say on the phone moves the TV to the right screen', async ({ browser }) => {
+  const tv = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+  await open(tv);
+  expect(await route(tv)).toBe('home');
+  await idle(tv);
+  const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  await phone.goto('/voice#t=' + encodeURIComponent(tokens().voice));
+  await expect(phone.locator('#conn')).toContainText('Connected');
+  // Home knows the phone is listening and says so.
+  await expect(tv.locator('.home-status')).toContainText('Phone microphone');
+  await expect(tv.locator('.home-sub')).toContainText('Talk on your phone');
+  const say = async (text) => { await phone.fill('#text', text); await phone.click('button.send'); };
+  await say('Show my projects');
+  await expect.poll(() => route(tv)).toBe('projects');
+  await say('Go home');
+  await expect.poll(() => route(tv)).toBe('home');
+  // The words show on home itself (no sheet over it).
+  await say('Show me what changed');
+  await expect.poll(() => route(tv)).toBe('diff');
+  expect(await tv.evaluate(() => window.__firedev.route.project)).toBe(PID);
+  await say('Go home');
+  await expect.poll(() => route(tv)).toBe('home');
+  await phone.close();
+  await expect(tv.locator('.home-status')).not.toContainText('Phone microphone');
+  await tv.close();
 });
 
 // Alexa requests signed with the test CA's key (e2e/server.py trusts it in place of Amazon's), sent over HTTP.

@@ -63,6 +63,10 @@ DATA_SOURCES = {"status", "projects", "agents", "history", "approvals", "convers
 AGENTS_POLL = 4.0
 
 
+# Requests about "the project" that make sense without naming one: from home they go to the default project.
+_PROJECT_SCOPED = {"show_changes", "show_activity", "run_action", "cancel_task", "continue_task", "undo_changes", "preview"}
+
+
 class FireDev:
     def __init__(self, config: Config, devices: DeviceStore, bus: Bus | None = None) -> None:
         self.config = config
@@ -75,6 +79,7 @@ class FireDev:
         self._flush: asyncio.TimerHandle | None = None
         self.focus_project: str | None = None
         self.agents: list[dict] = []
+        self.voice_links: dict[str, str] = {}  # connected phone microphones: client id -> device name
         self.agents_updated = 0.0
         self._agents_task: asyncio.Task | None = None
 
@@ -98,7 +103,16 @@ class FireDev:
                 self.bus.emit("state", pid, None, snapshot=self.sessions[pid].snapshot(), home=self.home())
 
     def home(self) -> dict:
-        return {"projects": [s.summary() for s in self.sessions.values()], "approvals": len(self.approvals)}
+        return {"projects": [s.summary() for s in self.sessions.values()], "approvals": len(self.approvals),
+                "voice_links": sorted(self.voice_links.values())}
+
+    def voice_link(self, client_id: str, name: str | None) -> None:
+        """A phone microphone page connected (name) or left (None): the TV's home shows that you can just talk."""
+        if name:
+            self.voice_links[client_id] = name
+        else:
+            self.voice_links.pop(client_id, None)
+        self.bus.emit("voice_link", None, None, links=sorted(self.voice_links.values()))
 
     def session(self, pid: str | None) -> ProjectSession:
         pid = pid or self.focus_project
@@ -602,8 +616,8 @@ class FireDev:
     async def voice(self, text: str, client: Client, source: str = "voice", project: str | None = None, ui: dict | None = None) -> dict:
         pid = project or self.focus_project
         intent = intents.parse(text, [s.summary() for s in self.sessions.values()], self._context(pid))
-        if intent.args.get("any_project") and not pid:
-            pid = self._default_project()
+        if not pid and (intent.args.get("any_project") or intent.name in _PROJECT_SCOPED):
+            pid = self._default_project()  # never "open a project first": the conversation picks one
         self.bus.emit("voice_command", pid, None, text=text, intent=intent.to_dict(), source=source,
                       agent=self.sessions[pid].adapter.display if pid in self.sessions else None)
         if pid in self.sessions and not intent.args.get("then"):  # a routed request is recorded where it goes

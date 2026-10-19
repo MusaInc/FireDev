@@ -87,3 +87,18 @@ def test_approval_while_the_tv_is_away_is_delivered_when_it_returns(setup):
         hello = ws.receive_json()
         assert hello["type"] == "hello" and hello["client"]["name"] == "Sony"
     assert devices.collect_token(CLAIM) is None  # handed over, gone
+
+
+def test_the_tv_knows_when_a_phone_microphone_is_connected(setup):
+    client, devices, _ = setup
+    tv_token, _ = devices.create("Sony TV", "tv")
+    phone_token, _ = devices.create("Phone microphone", "voice")
+    with client.websocket_connect("/ws?token=" + tv_token) as tv:
+        hello = tv.receive_json()
+        assert hello["type"] == "hello" and hello["home"]["voice_links"] == []
+        with client.websocket_connect("/ws?token=" + phone_token) as phone:
+            assert phone.receive_json()["type"] == "hello"
+            ev = tv.receive_json()
+            assert ev["type"] == "voice_link" and ev["data"]["links"] == ["Phone microphone"]
+        ev = tv.receive_json()
+        assert ev["type"] == "voice_link" and ev["data"]["links"] == []

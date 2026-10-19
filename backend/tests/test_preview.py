@@ -576,3 +576,16 @@ async def test_what_are_my_agents_doing_shows_a_live_screen_at_once(tmp_path):
     reply = next(e for e in seen if e.type == "voice_reply")
     assert reply.project == "web" and reply.data["navigate"] == "surface"
     assert any(e.type == "agent_speech" for e in seen), "FireDev answers out loud"
+
+
+async def test_from_home_a_request_about_the_project_goes_to_the_default_one(tmp_path):
+    svc, _ = make_service(tmp_path)
+    svc.focus_project = None
+    q = svc.bus.subscribe()
+    res = await svc.voice("Show me the activity", None, source="phone")
+    assert res["navigate"] == "activity" and "open a project" not in res["message"].lower()
+    seen = []
+    while not q.empty():
+        seen.append(q.get_nowait())
+    reply = next(e for e in seen if e.type == "voice_reply")
+    assert reply.project == "web", "the TV is told which project's screen to show"

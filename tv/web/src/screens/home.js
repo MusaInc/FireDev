@@ -1,75 +1,95 @@
-/** Home: the configured projects as large cards. */
+/**
+ * Home: almost nothing. A voice orb, one sentence, one way to start talking. You say what you want and FireDev
+ * chooses the project and the screen (see director.js). The projects list is still there for when you'd rather
+ * point (☰-less recovery, accessibility): Down, then "Projects", or say "show my projects".
+ *
+ * The orb and the sentence follow the conversation wherever it comes from: the TV's microphone, the phone
+ * microphone page, or FireDev and the agent talking back.
+ */
 
-import { clear, focusable, h, icon } from '../util.js';
-import { brand, connPill, hints } from './common.js';
+import { clear, focusable, h, svg, icons } from '../util.js';
 
-function statusOf(p) {
-  if (p.connection === 'error') return { dot: 'bad', text: 'Can’t connect' };
-  if (p.connection === 'reconnecting') return { dot: 'warn', text: 'Reconnecting' };
-  if (p.connection !== 'connected') {
-    if (p.connection === 'disconnected') return { dot: '', text: 'Ready to connect' };
-    return { dot: 'live', text: 'Connecting' };
-  }
-  if (p.busy) return { dot: 'live', text: 'Working · ' + (p.task || '') };
-  if (p.build === 'failed') return { dot: 'bad', text: 'Build failing' };
-  if (p.agent_state === 'unavailable') return { dot: 'bad', text: p.agent + ' not installed' };
-  return { dot: 'ok', text: 'Ready' };
+function greeting() {
+  const hr = new Date().getHours();
+  return hr < 5 ? 'Up late?' : hr < 12 ? 'Good morning.' : hr < 18 ? 'Good afternoon.' : 'Good evening.';
 }
 
 export class HomeScreen {
-  constructor(app, route) {
+  constructor(app) {
     this.app = app;
-    this.route = route;
-    this.pill = h('div');
-    this.cards = h('div.project-row');
+    this.orb = h('div.orb', null, h('div.orb-glow'), h('div.orb-ring'), h('div.orb-ring.r2'), h('div.orb-core'));
+    this.head = h('div.home-line');
+    this.sub = h('div.home-sub');
+    this.talk = focusable(h('button.btn.talk', null, svg(icons.mic), h('span', null, 'Start talking')), 'talk', { select: () => this.startTalking() });
+    this.work = h('div.home-work');
+    this.status = h('div.home-status');
+    this.more = focusable(h('button.btn.ghost', null, 'Projects'), 'projects', { select: () => app.navigate('projects') });
     this.el = h('section.screen.home', null,
-      h('div.topbar', null, brand(), h('div.grow'), this.pill),
-      h('div.home-hero', null, h('div.t-display', null, 'FireDev'), h('div.tagline', null, 'Develop from anywhere.')),
-      this.cards,
-      h('div', { style: 'flex:1' }),
-      hints([['OK', 'Open project'], ['☰', 'Speak'], ['◁', 'Exit']]));
+      h('div.home-top', null, h('div.home-brand', null, svg(icons.mark), 'FireDev'), h('div.grow'), this.status),
+      h('div.home-center', null, this.orb, this.head, this.sub, h('div.home-actions', null, this.talk), this.work),
+      h('div.home-foot', null, h('div.grow'), this.more));
     this.sig = '';
   }
 
-  initialFocus() {
-    const pre = this.route.preselect || this.app.focusProject;
-    return pre ? 'project-' + pre : null;
+  initialFocus() { return 'talk'; }
+
+  /** The one button: talk on the TV if it can listen, otherwise on the phone (linking it the first time). */
+  startTalking() {
+    const app = this.app;
+    if (app.voice.listen()) return;
+    if ((app.home.voice_links || []).length) {
+      app.heard = { state: 'ready', text: '', at: Date.now() };
+      app.render();
+      return;
+    }
+    app.overlays.openPhoneLink();
+  }
+
+  /** What the orb shows, from the most immediate thing happening. */
+  state() {
+    const app = this.app;
+    const v = app.voice;
+    const heard = app.heard && Date.now() - app.heard.at < 12000 ? app.heard : null;
+    const busy = (app.home.projects || []).find((p) => p.busy);
+    if (v.listening || (heard && heard.state === 'listening')) return { key: 'listening', line: heard && heard.text ? '“' + heard.text + '”' : 'I’m listening.' };
+    if (v.speaking) return { key: 'speaking', line: v.speaking.text, who: v.speaking.who };
+    if (heard && heard.state === 'understood') return { key: 'thinking', line: '“' + heard.text + '”' };
+    if (v.awaiting) return { key: 'thinking', line: 'One moment…' };
+    if (heard && heard.state === 'ready') return { key: 'ready', line: 'Go ahead, I’m listening on your phone.' };
+    if (busy) return { key: 'working', line: busy.agent + ' is working on ' + lower(busy.task || 'something') + '.' };
+    return { key: 'idle', line: greeting() + ' What shall we build?' };
   }
 
   update() {
     const app = this.app;
-    clear(this.pill).appendChild(connPill(app, null));
-    const projects = app.home.projects || [];
-    const sig = JSON.stringify(projects.map((p) => [p.id, statusOf(p), p.machine, p.agent, p.name]));
+    const st = this.state();
+    const phones = app.home.voice_links || [];
+    const busy = (app.home.projects || []).filter((p) => p.busy);
+    const conn = app.config.connection;
+    const sig = JSON.stringify([st, phones, busy.map((p) => [p.id, p.task]), app.status, conn && conn.name, app.voice.available()]);
     if (sig === this.sig) return;
     this.sig = sig;
-    clear(this.cards);
-    for (const p of projects) {
-      const st = statusOf(p);
-      const glyph = /android|kotlin|gradle/i.test(p.name + ' ' + (p.description || '') + ' ' + (p.aliases || []).join(' ')) ? 'android' : 'code';
-      this.cards.appendChild(focusable(h('div.card.project-card', null,
-        h('div.icon', null, icon(glyph)),
-        h('div.t-heading.clip', null, p.name),
-        h('dl.facts', null,
-          h('dt', null, 'Machine'), h('dd.clip', null, p.machine),
-          h('dt', null, 'Agent'), h('dd', null, p.agent),
-          h('dt', null, 'Status'), h('dd', null, h('span.dot' + (st.dot ? '.' + st.dot : '')), h('span.clip', null, st.text)))),
-      'project-' + p.id, { select: () => app.openProject(p.id) }));
-    }
-    this.cards.appendChild(focusable(h('div.card.add-card', null,
-      icon('plus'),
-      h('div.t-label', null, 'Phone microphone'),
-      h('div.t-meta', { style: 'margin-top:10px' }, 'Scan to speak from your phone')), 'phone-mic', { select: () => app.overlays.openPhoneLink() }));
-    const c = app.config.connection;
-    if (c) {
-      this.cards.appendChild(focusable(h('div.card.add-card', null, icon(c.mode === 'ssh' ? 'terminal' : 'code'),
-        h('div.t-label.clip', null, c.name),
-        h('div.t-meta', { style: 'margin-top:10px' }, (c.mode === 'ssh' ? 'SSH · ' + c.user + '@' + c.host : 'This Wi-Fi · ' + c.host) + ' · OK to change')),
-      'connection', { select: () => app.changeConnection() }));
-    }
+    this.orb.className = 'orb ' + st.key;
+    clear(this.head).append(st.line);
+    this.head.className = 'home-line' + (st.key === 'speaking' || st.line.length > 60 ? ' long' : '');
+    const tvMic = app.voice.available();
+    clear(this.sub).append(st.key === 'idle' || st.key === 'working'
+      ? (phones.length ? 'Talk on your phone' + (tvMic ? ', or press OK' : '') + '. Ask for anything: a new page, what changed, how something works.'
+        : tvMic ? 'Press OK and talk. Ask for anything: a new page, what changed, how something works.'
+          : 'Press OK to use your phone as the microphone.')
+      : st.who && st.key === 'speaking' ? st.who : '');
+    this.talk.querySelector('span').textContent = st.key === 'listening' ? 'Listening…' : phones.length && !tvMic ? 'Talk on my phone' : 'Start talking';
+    clear(this.work);
+    busy.slice(0, 2).forEach((p) => this.work.appendChild(focusable(h('div.work-chip', null, h('span.dot.live.pulse'),
+      h('span.clip', null, p.name + ' · ' + (p.task || 'working'))), 'work-' + p.id, { select: () => app.openProject(p.id) })));
+    const online = app.status === 'online';
+    clear(this.status).append(
+      phones.length ? h('span.home-pill', null, svg(icons.phone), 'Phone microphone') : null,
+      h('span.home-pill', null, h('span.dot' + (online ? '.ok' : '.warn')), online ? (conn ? conn.name : 'Connected') : 'Reconnecting…'));
   }
 
-  back() {
-    this.app.overlays.confirmExit();
-  }
+  back() { this.app.overlays.confirmExit(); }
 }
+
+function lower(s) { return s ? s[0].toLowerCase() + s.slice(1) : s; }
+
