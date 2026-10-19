@@ -559,3 +559,20 @@ def test_live_build_setting(tmp_path):
     assert not svc.previews._live_build("web")
     svc, _ = make_service(tmp_path)
     assert svc.previews._live_build("web")
+
+
+async def test_what_are_my_agents_doing_shows_a_live_screen_at_once(tmp_path):
+    svc, _ = make_service(tmp_path)
+    q = svc.bus.subscribe()
+    res = await svc.voice("What are my agents doing?", None, source="phone")
+    assert res["intent"]["name"] == "agents_dashboard" and res["navigate"] == "surface"
+    s = svc.sessions["web"]
+    assert s.surface and s.surface["title"] == "Your agents"
+    assert any(n.get("type") == "agent_status" for n in s.surface["root"]["children"])
+    assert "quiet" in res["message"].lower() or "busy" in res["message"].lower()
+    seen = []
+    while not q.empty():
+        seen.append(q.get_nowait())
+    reply = next(e for e in seen if e.type == "voice_reply")
+    assert reply.project == "web" and reply.data["navigate"] == "surface"
+    assert any(e.type == "agent_speech" for e in seen), "FireDev answers out loud"

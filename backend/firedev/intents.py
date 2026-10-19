@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 INTENTS = {
     "open_project", "go_home", "send_agent_task", "run_action", "show_changes", "show_activity", "get_status",
     "approve_action", "reject_action", "cancel_task", "continue_task", "undo_changes", "help",
-    "ui_edit", "ui_back", "navigate", "speech_stop", "conversation_end", "preview",
+    "ui_edit", "ui_back", "navigate", "speech_stop", "conversation_end", "preview", "show_projects", "agents_dashboard",
 }
 
 
@@ -49,7 +49,12 @@ _UNDO = re.compile(r"\b(undo|revert|roll back|rollback)\b.*\b(change|changes|tha
 _DIFF = re.compile(r"^(show|see|review|open)\b.*\b(changed|changes|diff|difference|edits)\b|^(the )?(diff|changes)$")
 _ACTIVITY = re.compile(r"\b(show|open)\b.*\b(activity|history|timeline|what (you|it|codex|claude) did)\b")
 _STATUS = re.compile(r"^(status|what'?s (the )?status|how'?s it going|what are you doing|what is (codex|claude|the agent) doing|where are we|progress)$")
-_HOME = re.compile(r"^(go )?(home|back to (projects|home)|show (my )?projects|switch projects?)$")
+_HOME = re.compile(r"^(go )?(back )?(to )?(the )?home( screen)?$|^start over$")
+_PROJECTS = re.compile(r"^(show|list|open)( me)? (all )?(my |the )?projects$|^switch projects?$|^(which|what) projects (do i have|are there)$|^back to (my )?projects$")
+_AGENTS = re.compile(r"^(what|how) (are|is) (all )?(of )?(my|the|all my|all the) agents( (doing|up to|working on|getting on))?$|"
+                     r"^(show|open)( me)? (my |the |all )?(coding )?agents?( dashboard)?$|^agents? dashboard$|^what'?s everyone (doing|working on)$")
+_EXPLAIN_HOW = re.compile(r"^(explain|walk me through|show me|tell me) how (this|it|that|the .+|my .+|our .+) works?$|^how does (this|it|that|the .+|my .+|our .+) work$|"
+                          r"^explain (the|this|my|our) (architecture|code|codebase|flow|project|app|site|structure)$")
 _HELP = re.compile(r"^(help|what can (i|you) (say|do))$")
 _SPEECH_STOP = re.compile(r"^(stop (talking|speaking|reading)|be quiet|quiet|shush|shut up|silence|that'?s enough|enough)( please)?$")
 _CONVO_END = re.compile(r"^(stop listening|goodbye|good bye|bye|that'?s all( for now)?|we'?re done|i'?m done|thanks,? that'?s all)$")
@@ -109,6 +114,19 @@ def _match_project(name: str, projects: list[dict]) -> dict | None:
     return best if best_score >= 0.5 else None
 
 
+def mentioned_project(t: str, projects: list[dict], exclude: str | None = None) -> dict | None:
+    """The one project a request is about, by its name or an alias said as words ("a landing page" -> the project
+    with the alias "landing page"). None if no project, or more than one, is mentioned, or if [exclude] is."""
+    hits = []
+    for p in projects:
+        names = {p["name"].lower(), *(a.lower() for a in p.get("aliases", []) or [])}
+        if any(n and re.search(r"(?<![a-z0-9])" + re.escape(n) + r"(?![a-z0-9])", t) for n in names):
+            hits.append(p)
+    if exclude is not None and any(p["id"] == exclude for p in hits):
+        return None
+    return hits[0] if len(hits) == 1 else None
+
+
 def parse(text: str, projects: list[dict], context: dict | None = None) -> Intent:
     """context: {'project': id or None, 'agent': 'Codex', 'actions': {...}, 'last_build_failed': bool,
     'last_tests_failed': bool, 'pending_approval': bool}"""
@@ -136,7 +154,11 @@ def parse(text: str, projects: list[dict], context: dict | None = None) -> Inten
     if _HELP.match(t):
         return Intent("help", "What you can say")
     if _HOME.match(t):
-        return Intent("go_home", "Show projects")
+        return Intent("go_home", "Home")
+    if _PROJECTS.match(t):
+        return Intent("show_projects", "Show projects")
+    if _AGENTS.match(t):
+        return Intent("agents_dashboard", "What your agents are doing")
     if ctx.get("project"):
         from . import preview_intents
         pv = preview_intents.parse(t, text, ctx)
@@ -183,17 +205,32 @@ def parse(text: str, projects: list[dict], context: dict | None = None) -> Inten
     if t in ("show me", "show me that", "show it", "show that", "put that on screen", "put it on the screen", "put it on screen"):
         return Intent("send_agent_task", "Show it on screen", {"task": "Show what we were just talking about on the TV.",
                                                                 "mode": "present", "lane": "ui", "any_project": not ctx.get("project")})
+    if _EXPLAIN_HOW.match(t):
+        return Intent("send_agent_task", _title(t), {
+            "task": f"{text.strip()} Explain it visually: put a diagram on the TV (a graph with short node labels and the real "
+                    "components and how they connect, from the actual code), with a sentence or two of explanation beside it.",
+            "mode": "present", "lane": "ui", "any_project": not ctx.get("project")})
     if _PRESENT.match(t) and not _DIFF.search(t) and not _ACTIVITY.search(t):
         return Intent("send_agent_task", _title(_AGENT_PREFIX.sub("", t)), {"task": text.strip(), "mode": "present", "lane": "ui",
                                                                              "any_project": not ctx.get("project")})
     if not ctx.get("project"):
-        # Outside a project the only useful thing is choosing one.
+        # Outside a project FireDev picks one itself: the one named, the one the request is about, or the default.
+        p = mentioned_project(t, projects)
+        if p and t not in {p["name"].lower(), *(x.lower() for x in p.get("aliases", []) or [])}:
+            return Intent("open_project", f"Open {p['name']}", {"project": p["id"], "then": text})
         p = _match_project(t, projects)
         if p:
             return Intent("open_project", f"Open {p['name']}", {"project": p["id"]})
-        if len(projects) == 1:
-            return Intent("open_project", f"Open {projects[0]['name']}", {"project": projects[0]["id"], "then": text})
+        p = next((q for q in projects if q["id"] == ctx.get("default")), None) \
+            or (projects[0] if len(projects) == 1 else None)
+        if p:
+            return Intent("open_project", f"Open {p['name']}", {"project": p["id"], "then": text})
         return Intent("help", "Choose a project first", confidence=0.3)
+
+    # A request about another project ("build me a landing page" while the Android app is open) goes there.
+    other = mentioned_project(t, projects, exclude=ctx["project"])
+    if other:
+        return Intent("open_project", f"Open {other['name']}", {"project": other["id"], "then": text, "routed": True})
 
     def action_for(kind: str) -> str | None:
         for aid, a in actions.items():

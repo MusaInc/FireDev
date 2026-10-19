@@ -591,7 +591,7 @@ class FireDev:
 
     def _context(self, pid: str | None) -> dict:
         if not pid or pid not in self.sessions:
-            return {"project": None, "pending_approval": bool(self.approvals)}
+            return {"project": None, "pending_approval": bool(self.approvals), "default": self._default_project()}
         s = self.sessions[pid]
         return {"project": pid, "agent": s.adapter.display, "busy": s.busy, "has_surface": bool(s.surface),
                 "actions": {a.id: {"kind": a.kind, "title": a.title} for a in s.project.actions.values()},
@@ -606,7 +606,7 @@ class FireDev:
             pid = self._default_project()
         self.bus.emit("voice_command", pid, None, text=text, intent=intent.to_dict(), source=source,
                       agent=self.sessions[pid].adapter.display if pid in self.sessions else None)
-        if pid in self.sessions:
+        if pid in self.sessions and not intent.args.get("then"):  # a routed request is recorded where it goes
             self.sessions[pid].add_turn("user", text, kind="request", source=source)
         try:
             result = await self._run_intent(intent, client, source, pid, ui)
@@ -615,6 +615,8 @@ class FireDev:
         except genui.SpecError as e:
             result = {"ok": False, "message": f"I couldn't change the screen: {e}"}
         reply = result.get("message")
+        if result.get("project") in self.sessions:
+            pid = result["project"]  # routed to another project, or a screen shown in one
         self.bus.emit("voice_reply", pid, None, text=text, intent=intent.name, reply=reply, ok=result.get("ok", True),
                       navigate=result.get("navigate"), speech=result.get("speech"), listen=result.get("listen"),
                       client_action=result.get("client_action"))
@@ -625,6 +627,30 @@ class FireDev:
         if reply and pid in self.sessions and intent.name != "send_agent_task":
             self.sessions[pid].add_turn("firedev", reply, kind="reply")
         return {"intent": intent.to_dict(), **result}
+
+    async def _agents_dashboard(self, pid: str | None) -> dict:
+        """"What are my agents doing?": a live screen at once (no agent turn needed) and a spoken answer."""
+        s = self.session(pid or self._default_project())
+        agents = await self.scan_agents(s)
+        working = [a for a in agents if a.get("state") == "working" or a.get("task")]
+        machine = [a for a in agents if a.get("source") != "firedev"]
+        spec = {"schema": "firedev.ui/1", "title": "Your agents", "subtitle": "Live · keeps itself up to date",
+                "provenance": {"kind": "live", "sources": ["FireDev", "processes on " + s.project.machine.display]},
+                "root": {"type": "stack", "gap": "l", "children": [
+                    {"type": "grid", "columns": 3, "children": [
+                        {"type": "metric", "id": "m_working", "label": "Working now", "value": len(working), "tone": "info" if working else "neutral"},
+                        {"type": "metric", "id": "m_projects", "label": "FireDev projects", "value": len(self.sessions)},
+                        {"type": "metric", "id": "m_other", "label": "Other agents on the machine", "value": len(machine)}]},
+                    {"type": "agent_status", "id": "agents", "source": "agents", "title": "Agents", "size": "xl"}]}}
+        s.show_surface(spec, "firedev")
+        if working:
+            said = "; ".join(f"{a['agent']} on {a['project']}: {(a.get('task') or 'working').rstrip('.')}" for a in working[:3])
+            msg = f"{len(working)} agent{' is' if len(working) == 1 else 's are'} busy. {said}."
+        else:
+            msg = f"All quiet: none of your {len(self.sessions)} FireDev agents are working right now."
+            if machine:
+                msg += f" There {'is' if len(machine) == 1 else 'are'} {len(machine)} other agent process{'' if len(machine) == 1 else 'es'} on the machine."
+        return {"ok": True, "message": msg, "navigate": "surface", "project": s.project.id}
 
     def say(self, pid: str | None, text: str) -> None:
         if pid in self.sessions:
@@ -670,10 +696,23 @@ class FireDev:
                     "listen": "off" if n == "conversation_end" else None, "speak": n == "conversation_end"}
         if n == "open_project":
             res = await self._cmd_open_project({"project": a["project"], "conversational": not a.get("then")}, client)
+            res["navigate"] = "workspace"
             if res.get("ok") and a.get("then"):
+                name = self.sessions[a["project"]].project.name
                 follow = await self.voice(a["then"], client, source, a["project"])
-                res["message"] = f"{res['message']} {follow.get('message', '')}".strip()
+                # Moving to another project is worth a word; the follow-up's own answer comes from the agent.
+                res["message"] = f"I'll do that in {name}." if a.get("routed") or follow.get("intent", {}).get("name") == "send_agent_task" \
+                    else f"{res['message']} {follow.get('message', '')}".strip()
+                res["navigate"] = follow.get("navigate") or "workspace"
             return res
+        if n == "go_home":
+            return {"ok": True, "message": "", "navigate": "home", "speak": False}
+        if n == "show_projects":
+            names = [s.project.name for s in self.sessions.values()]
+            return {"ok": True, "navigate": "projects",
+                    "message": f"You have {len(names)} project{'s' if len(names) != 1 else ''}: {', '.join(names)}."}
+        if n == "agents_dashboard":
+            return await self._agents_dashboard(pid)
         if n == "send_agent_task":
             if a.get("lane") == "ui":
                 s = self.session(pid)
@@ -687,6 +726,8 @@ class FireDev:
                 s = self.session(pid)
                 cur = s.current.title.lower() if s.current else "the current task"
                 res["message"] = f"I'll do that next, after {cur}."
+            res.setdefault("navigate", "workspace")  # the TV follows the work (or keeps the preview it is showing)
+            res.setdefault("project", pid)
             return res
         if n == "run_action":
             return await self._cmd_run_action({"project": pid, "action": a["action"], "source": source}, client)
@@ -716,8 +757,6 @@ class FireDev:
             return {"ok": True, "message": msg, "navigate": "changes"}
         if n == "show_activity":
             return {"ok": True, "message": "Here's the activity.", "navigate": "activity"}
-        if n == "go_home":
-            return {"ok": True, "message": "Here are your projects.", "navigate": "home"}
         if n == "help":
             return {"ok": intent.confidence > 0, "message": intent.title if intent.confidence < 1 else
                     "Try: why is the build failing, fix it and run the tests, build the app, or deploy the preview."}
