@@ -4,9 +4,13 @@
 @font-face { font-family: Outfit; src: url("../../tv/web/fonts/Outfit.woff2") format("woff2"); font-weight: 100 900; }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { background: transparent; font-family: Outfit; color: #f4f1ea; }
-.art { position: relative; overflow: hidden; background: radial-gradient(120% 120% at 85% -10%, #26262c 0%, #0b0b0d 55%, #09090b 100%); display: flex; align-items: center; }
-.icon { width: 512px; height: 512px; justify-content: center; }
+.art { position: relative; overflow: hidden; display: flex; align-items: center;
+  background: radial-gradient(55% 75% at 14% 30%, rgba(255,106,61,.22), transparent 70%), radial-gradient(50% 70% at 92% 95%, rgba(229,48,108,.16), transparent 70%), #09090b; }
+.icon { width: 512px; height: 512px; justify-content: center; background: linear-gradient(140deg, #ffc56b 0%, #ff6a3d 52%, #e5306c 100%); }
 .icon svg { width: 300px; height: 300px; }
+.icon svg rect { display: none; }
+.glow { filter: drop-shadow(0 30px 80px rgba(255,106,61,.45)); }
+.word span { font-weight: 300; color: rgba(244,241,234,.72); }
 .banner { width: 1280px; height: 720px; padding: 0 120px; gap: 64px; }
 .banner svg { width: 220px; height: 220px; flex: none; }
 .banner .word { font-size: 196px; font-weight: 700; letter-spacing: -0.035em; line-height: 1; }
@@ -17,13 +21,13 @@ body { background: transparent; font-family: Outfit; color: #f4f1ea; }
 .feature .tag { margin-top: 26px; font-size: 64px; color: rgba(244,241,234,.66); }
 </style></head>
 <body>
-<template id="mark"><svg viewBox="0 0 52 52" fill="none"><rect x="1.5" y="1.5" width="49" height="49" rx="13" stroke="#f4f1ea" stroke-width="3"/><path d="M15 33l8-7-8-7" stroke="#f4f1ea" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M27 35h10" stroke="#f4f1ea" stroke-width="3.5" stroke-linecap="round"/></svg></template>
+<template id="mark"><svg class="glow" viewBox="0 0 52 52" fill="none"><defs><linearGradient id="e" x1="6" y1="2" x2="46" y2="50" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ffc56b"/><stop offset=".5" stop-color="#ff6a3d"/><stop offset="1" stop-color="#e5306c"/></linearGradient></defs><rect x="1" y="1" width="50" height="50" rx="14" fill="url(#e)"/><path d="M15 34l9-8-9-8" stroke="#1a0d08" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M28 35h10" stroke="#1a0d08" stroke-width="4" stroke-linecap="round"/></svg></template>
 <div id="root"></div>
 <script>
 const kind = new URLSearchParams(location.search).get('kind');
 const mark = document.getElementById('mark').innerHTML;
 const root = document.getElementById('root');
 if (kind === 'icon') root.innerHTML = `<div class="art icon">${mark}</div>`;
-else if (kind === 'banner') root.innerHTML = `<div class="art banner">${mark}<div><div class="word">FireDev</div><div class="tag">Develop from anywhere.</div></div></div>`;
-else root.innerHTML = `<div class="art feature">${mark}<div><div class="word">FireDev</div><div class="tag">A voice-first development workstation for Fire TV.</div></div></div>`;
+else if (kind === 'banner') root.innerHTML = `<div class="art banner">${mark}<div><div class="word">Fire<span>Dev</span></div><div class="tag">Build from your sofa.</div></div></div>`;
+else root.innerHTML = `<div class="art feature">${mark}<div><div class="word">Fire<span>Dev</span></div><div class="tag">Build software from your sofa. Just say it.</div></div></div>`;
 </script></body></html>

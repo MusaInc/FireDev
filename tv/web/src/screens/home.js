@@ -8,6 +8,7 @@
  */
 
 import { clear, focusable, h, svg, icons } from '../util.js';
+import { liveState } from '../live.js';
 
 function greeting() {
   const hr = new Date().getHours();
@@ -25,7 +26,7 @@ export class HomeScreen {
     this.status = h('div.home-status');
     this.more = focusable(h('button.btn.ghost', null, 'Projects'), 'projects', { select: () => app.navigate('projects') });
     this.el = h('section.screen.home', null,
-      h('div.home-top', null, h('div.home-brand', null, svg(icons.mark), 'FireDev'), h('div.grow'), this.status),
+      h('div.home-top', null, h('div.home-brand', null, svg(icons.mark), h('span.wordmark', null, 'Fire', h('span', null, 'Dev'))), h('div.grow'), this.status),
       h('div.home-center', null, this.orb, this.head, this.sub, h('div.home-actions', null, this.talk), this.work),
       h('div.home-foot', null, h('div.grow'), this.more));
     this.sig = '';
@@ -56,7 +57,12 @@ export class HomeScreen {
     if (heard && heard.state === 'understood') return { key: 'thinking', line: '“' + heard.text + '”' };
     if (v.awaiting) return { key: 'thinking', line: 'One moment…' };
     if (heard && heard.state === 'ready') return { key: 'ready', line: 'Go ahead, I’m listening on your phone.' };
-    if (busy) return { key: 'working', line: busy.agent + ' is working on ' + lower(busy.task || 'something') + '.' };
+    if (busy) {
+      // What the agent is doing right now, in words, so home is worth watching too.
+      const live = liveState(app.project(busy.id));
+      const now = live && live.now;
+      return { key: 'working', line: busy.task || 'Working', doing: busy.agent + ' is ' + (now ? lower(now.verb) + ' ' + now.object : 'working') };
+    }
     return { key: 'idle', line: greeting() + ' What shall we build?' };
   }
 
@@ -73,7 +79,8 @@ export class HomeScreen {
     clear(this.head).append(st.line);
     this.head.className = 'home-line' + (st.key === 'speaking' || st.line.length > 60 ? ' long' : '');
     const tvMic = app.voice.available();
-    clear(this.sub).append(st.key === 'idle' || st.key === 'working'
+    clear(this.sub).append(st.key === 'working' ? h('span.home-doing', null, h('span.dot.live.pulse'), st.doing)
+      : st.key === 'idle'
       ? (phones.length ? 'Talk on your phone' + (tvMic ? ', or press OK' : '') + '. Ask for anything: a new page, what changed, how something works.'
         : tvMic ? 'Press OK and talk. Ask for anything: a new page, what changed, how something works.'
           : 'Press OK to use your phone as the microphone.')

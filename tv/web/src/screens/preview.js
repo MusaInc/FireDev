@@ -9,6 +9,8 @@
  * mobile viewports are real CSS widths, so the page's own responsive layout is what you see; zoom changes that width.
  */
 
+import { liveState, STAGES } from '../live.js';
+import { nowPanel } from './livebits.js';
 import { clear, focusable, h, icon } from '../util.js';
 import { SPLITS, VIEWPORTS, ZOOMS } from '../preview.js';
 import { agentPill, connPill } from './common.js';
@@ -421,22 +423,27 @@ export class PreviewScreen {
   renderAgent(p) {
     if (this.prefs.layout === 'full') return;
     const t = p.task || p.last_task;
-    const steps = t ? (p.activity || []).filter((a) => a.task === t.id && a.kind !== 'task' && a.kind !== 'task-end' && a.kind !== 'agent').slice(-4) : [];
+    const live = liveState(p);
     const said = (p.conversation || []).filter((c) => c.role === 'agent').slice(-1)[0];
-    if (!this.changed('agent', [t && t.id, t && t.status, t && t.status_text, steps.map((s) => [s.id, s.status]), said && said.id, p.agent && p.agent.state])) return;
+    if (!this.changed('agent', [t && t.id, t && t.status, live && [live.now, live.stage, live.said, live.steps.map((s) => [s.id, s.status])], said && said.id, p.agent && p.agent.state])) return;
     const c = clear(this.agent);
-    const running = t && (t.status === 'running' || t.status === 'queued' || t.status === 'waiting_approval');
+    const running = live && (live.running || live.waiting);
+    c.classList.toggle('is-live', !!running);
     c.append(h('div.pv-agent-head', null, agentPill(p)));
     if (!t) {
       c.append(h('div.t-label', { style: 'margin-top:28px' }, 'Ask for a change'),
         h('div.t-meta', { style: 'margin-top:12px' }, 'Say “Make the header smaller” and watch it change here.'));
     } else {
+      const pct = (live.stage / (STAGES.length - 1)) * 100;
       c.append(h('div.t-meta', { style: 'margin-top:26px' }, running ? 'Working on' : t.status === 'completed' ? 'Done' : 'Last task'),
-        h('div.pv-agent-title.clamp3', null, t.title));
-      if (running) c.append(h('div.task-status', null, t.status === 'waiting_approval' ? icon('shield', 'warn') : h('span.spinner'),
-        h('span.clip', null, t.status === 'waiting_approval' ? 'Waiting for your approval' : t.status_text)));
+        h('div.pv-agent-title.clamp2', null, t.title),
+        h('div.pv-rail', null, h('div.pv-rail-track', null, h('i', { style: 'width:' + pct + '%' })),
+          h('div.pv-rail-label', null, STAGES[live.stage].label + '  ·  ' + (live.stage + 1) + ' of ' + STAGES.length)));
+      if (running) c.append(h('div.pv-now', null, nowPanel(live.now, true)));
+      if (running && live.said) c.append(h('div.pv-quote.clamp3', null, '“' + live.said + '”'));
+      const steps = live.steps.slice(running ? -3 : -4);
       if (steps.length) c.append(h('div.pv-steps', null, steps.map((s) => h('div.pv-step', null,
-        s.status === 'running' ? h('span.spinner') : icon(s.status === 'failed' ? 'cross' : 'check', s.status === 'failed' ? 'bad' : 'ok'), h('span.clip', null, s.title)))));
+        s.status === 'running' ? h('span.spinner') : icon(s.status === 'failed' && !s.soft ? 'cross' : s.icon || 'check', s.status === 'failed' && !s.soft ? 'bad' : ''), h('span.clip', null, s.past || s.object)))));
     }
     if (said && !running) c.append(h('div.pv-said.clamp4', null, said.text));
     c.append(h('div.pv-agent-foot.t-hint', null, 'OK: back to ' + this.agentName() + '  ·  ☰ Speak'));

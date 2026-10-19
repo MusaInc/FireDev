@@ -1,6 +1,6 @@
 /** Before the TV is online: connecting to the FireDev service, or pairing with it. */
 
-import { clear, focusable, h } from '../util.js';
+import { clear, focusable, h, icons, svg } from '../util.js';
 import { brand } from './common.js';
 
 export class CenterScreen {
@@ -29,6 +29,7 @@ export class CenterScreen {
     if (sig === this.sig) return;
     this.sig = sig;
     clear(this.body);
+    this.el.classList.remove('is-splash');
     clearInterval(this.timer);
     this.countdown = null;
     if (app.status === 'pairing' && app.pairingCode && app.pairingExpired) {
@@ -57,7 +58,21 @@ export class CenterScreen {
       this.timer = setInterval(() => this.tick(), 1000);
       return;
     }
-    const offline = app.status === 'offline';
+    // Once the service has been unreachable, retries keep the help screen instead of flashing the splash.
+    if (app.status === 'offline') this.sawOffline = true;
+    const offline = app.status === 'offline' || (this.sawOffline && app.status === 'connecting');
+    const conn = app.config.connection;
+    if (!offline) {
+      // The first thing anyone sees: the brand, big and calm, while the link comes up.
+      this.el.classList.add('is-splash');
+      this.body.append(h('div.splash', null,
+        h('div.splash-mark', null, h('span.splash-glow'), svg(icons.mark)),
+        h('div.splash-word.wordmark', null, 'Fire', h('span', null, 'Dev')),
+        h('div.splash-tag', null, 'Build software from your sofa. Just say it.'),
+        h('div.splash-line', null, h('i')),
+        h('div.splash-meta', null, 'Connecting to ' + (conn ? conn.name : 'FireDev') + '…')));
+      return;
+    }
     this.body.append(...[
       h('div.t-meta', null, offline ? 'Can’t reach FireDev' : 'Starting'),
       h('div.t-title', { style: 'margin-top:16px' }, offline ? 'Looking for your FireDev service…' : 'Connecting to FireDev…'),

@@ -193,6 +193,36 @@ test('agent task: live status, file change, diff view with remote scrolling, the
   await expect(page.locator('.tile[data-focus-id="changes"]')).toContainText('No changes');
 });
 
+test('the live view tells the story: stages, what it is doing now, the files it touches, then a receipt', async ({ page, request }) => {
+  test.setTimeout(90000);
+  await open(page);
+  await toWorkspace(page);
+  await idle(page);
+  await api(request, 'send_agent_task', { project: PID, task: 'Build a landing page DEMO' }, tokens().tv);
+  await expect(page.locator('.workspace.is-live')).toBeVisible({ timeout: 15000 });
+  await expect(page.locator('.rail-node.current .rail-label')).toHaveText(/Understand|Explore/);
+  // Words, not commands: a search is "Searching for …", and it isn't a failure when it finds nothing.
+  await expect(page.locator('.now-verb')).toHaveText('Searching', { timeout: 15000 });
+  await expect(page.locator('.cmd-say')).toContainText('for “title”');
+  await expect(page.locator('.files-live')).toContainText('No files touched yet');
+  await expect(page.locator('.timer')).toHaveText(/^0:\d\d$/);
+  // The first web file goes live: the page takes the screen and the side panel carries the story on.
+  await expect.poll(() => route(page), { timeout: 20000 }).toBe('preview');
+  await expect(page.locator('.pv-agent .now-verb')).toHaveText(/Creating|Editing/);
+  await expect(page.locator('.pv-rail-label')).toContainText('Build');
+  await expect(page.locator('.pv-agent svg.bad')).toHaveCount(0);
+  // Done: Back returns to the workspace, every stage ticked, a receipt and the changes file by file.
+  await idle(page);
+  await press(page, 'Escape');
+  expect(await route(page)).toBe('workspace');
+  await expect(page.locator('.receipt')).toBeVisible();
+  await expect(page.locator('.rail-node.done')).toHaveCount(5);
+  await expect(page.locator('.receipt')).toContainText('3/3');
+  await expect(page.locator('.tile[data-focus-id="changes"] .file-row')).toHaveCount(3);
+  await api(request, 'undo_changes', { project: PID }, tokens().tv);
+  await waitFor(page, (pid) => !window.__firedev.projects[pid].changes.files.length, PID);
+});
+
 test('activity lists every step; OK shows the raw terminal output', async ({ page }) => {
   await open(page);
   await toWorkspace(page);

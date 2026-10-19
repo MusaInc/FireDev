@@ -19,6 +19,21 @@ case "$prompt" in
     say i0 "Working slowly."
     for i in $(seq 1 60); do sleep 0.5; done
     say i1 "Done slowly." ;;
+  *DEMO*)
+    # A paced build for the live view: look around, create a page, style it, test it. DEMO_PACE seconds per step.
+    pace=${DEMO_PACE:-1.2}
+    fc() { echo "{\"type\":\"item.completed\",\"item\":{\"id\":\"$1\",\"type\":\"file_change\",\"changes\":[{\"path\":\"$PWD/$2\",\"kind\":\"$3\"}],\"status\":\"completed\"}}"; }
+    say d0 "Let's build that landing page. First a quick look around."
+    sleep "$pace"; cmd d1 "ls"
+    sleep "$pace"; cmd d2 "rg -n 'title' README.md"
+    sleep "$pace"; say d3 "Plan: a hero, three feature cards and a sign-up button."
+    sleep "$pace"; printf '<!doctype html>\n<title>Pulse</title>\n<h1>Pulse</h1>\n<p>Track every heartbeat of your app.</p>\n' > index.html; fc d4 index.html add
+    sleep "$pace"; printf 'body { font: 20px system-ui; }\nh1 { font-size: 64px; }\n' > styles.css; fc d5 styles.css add
+    sleep "$pace"; say d6 "Hero is in. Adding the feature cards now."
+    sleep "$pace"; printf '<section class=\"features\">Fast. Private. Beautiful.</section>\n' >> index.html; fc d7 index.html update
+    sleep "$pace"; echo "fixed" > src/app.txt; fc d8 src/app.txt update
+    sleep "$pace"; cmd d9 "firedev run test"
+    sleep "$pace"; say d10 "Landing page built: hero, features and styles. All three tests pass." ;;
   *PUSH*)
     say i0 "I'll publish the branch."
     cmd i1 "firedev request --reason 'Publish the fix' -- git push origin main"

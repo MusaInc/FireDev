@@ -28,7 +28,7 @@ export function agentPill(p) {
 }
 
 export function brand() {
-  return h('div.brand', null, svg(icons.mark), 'FireDev');
+  return h('div.brand', null, svg(icons.mark), h('span.wordmark', null, 'Fire', h('span', null, 'Dev')));
 }
 
 export function hints(list) {
