@@ -22,8 +22,8 @@ android {
         applicationId = "dev.firedev.tv"
         minSdk = 22
         targetSdk = 34
-        versionCode = 10
-        versionName = "0.3.5"
+        versionCode = 11
+        versionName = "0.3.6"
         buildConfigField("String", "FIREDEV_SERVER", "\"${setting("firedev.server", "")}\"")
         buildConfigField("String", "FIREDEV_TOKEN", "\"${setting("firedev.token", "")}\"")
     }
