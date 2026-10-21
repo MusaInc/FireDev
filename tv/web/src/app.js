@@ -304,6 +304,9 @@ export function createApp() {
       case 'voice_link':
         app.home.voice_links = d.links || [];
         break;
+      case 'remote_key':
+        if (app.input) app.input.inject(d.action, d.down !== false, d.source);
+        break;
       case 'build_finished':
       case 'deploy_finished':
       case 'tests_finished':
@@ -346,7 +349,7 @@ export function createApp() {
   }
 
   // --- input ---------------------------------------------------------------------------------------------
-  createInput((action, down) => {
+  app.input = createInput((action, down) => {
     if (down) app.director.key();
     if (app.focus.key(action, down)) return;
     if (action === 'select') { if (down) app.focus.select(); return; }

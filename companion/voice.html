@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#09090b">
-<title>FireDev microphone</title>
+<title>FireDev remote</title>
 <style>
   @font-face { font-family: Outfit; src: url("tv/fonts/Outfit.woff2") format("woff2"); font-weight: 100 900; }
   :root { --base: #09090b; --ivory: #f4f1ea; --ink: #15140f; --t2: rgba(244,241,234,.72); --t3: rgba(244,241,234,.5);
@@ -23,11 +23,11 @@
   .status .line { margin-top: 4px; font-size: 15px; color: var(--t2); }
   .approval { display: none; margin-top: 12px; padding: 14px 16px; border-radius: 14px; border: 1px solid rgba(242,194,91,.5); color: var(--warn); font-size: 15px; font-weight: 600; }
   .approval.show { display: block; }
-  .heard { margin-top: 28px; min-height: 96px; font-size: 28px; line-height: 1.2; font-weight: 500; letter-spacing: -.01em; }
+  .heard { margin-top: 20px; min-height: 68px; font-size: 26px; line-height: 1.2; font-weight: 500; letter-spacing: -.01em; }
   .heard .partial { color: var(--t2); }
   .reply { margin-top: 8px; font-size: 16px; color: var(--t2); min-height: 22px; }
   .reply.bad { color: var(--bad); }
-  .mic { margin: 28px auto 0; width: 168px; height: 168px; border-radius: 50%; border: none; background: var(--s2); color: var(--ivory); display: flex; align-items: center; justify-content: center; position: relative; touch-action: none; user-select: none; -webkit-user-select: none; }
+  .mic { margin: 20px auto 0; width: 148px; height: 148px; border-radius: 50%; border: none; background: var(--s2); color: var(--ivory); display: flex; align-items: center; justify-content: center; position: relative; touch-action: none; user-select: none; -webkit-user-select: none; }
   .mic svg { width: 64px; height: 64px; }
   .mic.on { background: var(--ivory); color: var(--ink); }
   .mic.on::after { content: ""; position: absolute; inset: -8px; border-radius: 50%; border: 3px solid var(--ivory); animation: ring 1.6s ease-out infinite; }
@@ -44,6 +44,23 @@
   .mode { display: flex; gap: 6px; margin-top: 24px; padding: 4px; border-radius: 14px; background: var(--s1); border: 1px solid var(--line); }
   .mode button { flex: 1; height: 40px; border-radius: 10px; border: none; background: none; color: var(--t2); font: inherit; font-size: 14px; font-weight: 600; }
   .mode button.sel { background: var(--s2); color: var(--ivory); }
+  /* Remote: a compact D-pad with OK in the middle, Back beside it. */
+  .remote { display: flex; align-items: center; justify-content: center; gap: 22px; margin-top: 26px; }
+  .pad { position: relative; width: 216px; height: 216px; border-radius: 50%; background: var(--s1); border: 1px solid var(--line); flex: none; }
+  .pad button, .back { position: absolute; border: none; background: none; color: var(--ivory); display: flex; align-items: center; justify-content: center; touch-action: none; user-select: none; -webkit-user-select: none; font: inherit; }
+  .pad .k { width: 72px; height: 72px; border-radius: 18px; }
+  .pad .k svg { width: 26px; height: 26px; }
+  .pad .up { top: 0; left: 72px; } .pad .down { bottom: 0; left: 72px; } .pad .left { left: 0; top: 72px; } .pad .right { right: 0; top: 72px; }
+  .pad .ok { top: 64px; left: 64px; width: 88px; height: 88px; border-radius: 50%; background: var(--s2); border: 1px solid var(--line); font-size: 18px; font-weight: 700; overflow: hidden; }
+  .pad .ok .fill { position: absolute; inset: 0; background: var(--warn); transform: scaleY(0); transform-origin: bottom; opacity: .35; }
+  .pad .ok.holding .fill { transform: scaleY(1); transition: transform 2s linear; }
+  .pad .ok span:last-child { position: relative; }
+  .back { position: static; flex-direction: column; gap: 4px; width: 72px; height: 72px; border-radius: 50%; background: var(--s1); border: 1px solid var(--line); font-size: 12px; font-weight: 600; color: var(--t2); }
+  .back svg { width: 24px; height: 24px; color: var(--ivory); }
+  .pad .k.press, .pad .ok.press, .back.press { background: var(--ivory); color: var(--ink); }
+  .pad .ok.press { border-color: var(--ivory); }
+  .remote-hint { text-align: center; margin-top: 10px; font-size: 13px; color: var(--t3); min-height: 18px; }
+  .remote-hint.warn { color: var(--warn); } .remote-hint.bad { color: var(--bad); }
   .note { margin-top: auto; padding-top: 24px; font-size: 12px; color: var(--t3); line-height: 1.5; }
   .gate { margin-top: 40px; font-size: 18px; line-height: 1.5; color: var(--t2); }
 </style>
@@ -61,7 +78,7 @@
     <div class="task" id="task">Ready</div>
     <div class="line" id="line"></div>
   </div>
-  <div class="approval" id="approval">Waiting for approval — choose on the TV with the remote.</div>
+  <div class="approval" id="approval">Approval waiting on the TV. Reject is selected first; to approve, move to Approve and hold OK for two seconds.</div>
 
   <div class="mode" id="mode">
     <button type="button" data-mode="direct" class="sel">FireDev</button>
@@ -76,6 +93,18 @@
   </button>
   <div class="hint" id="hint">Hold to talk</div>
 
+  <div class="remote" id="remote" aria-label="Remote">
+    <div class="pad">
+      <button class="k up" type="button" data-key="up" aria-label="Up"><svg viewBox="0 0 24 24" fill="none"><path d="M6 15l6-6 6 6" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <button class="k left" type="button" data-key="left" aria-label="Left"><svg viewBox="0 0 24 24" fill="none"><path d="M15 6l-6 6 6 6" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <button class="ok" type="button" data-key="select" aria-label="OK"><span class="fill"></span><span>OK</span></button>
+      <button class="k right" type="button" data-key="right" aria-label="Right"><svg viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <button class="k down" type="button" data-key="down" aria-label="Down"><svg viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    </div>
+    <button class="back" type="button" data-key="back" aria-label="Back"><svg viewBox="0 0 24 24" fill="none"><path d="M9 7L4 12l5 5M4 12h11a5 5 0 010 10h-2" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Back</button>
+  </div>
+  <div class="remote-hint" id="rhint">Moves around FireDev on the TV</div>
+
   <form id="form" autocomplete="off">
     <input id="text" placeholder="Or type (your keyboard’s mic works too)" enterkeyhint="send">
     <button class="send" type="submit">Send</button>
@@ -85,7 +114,7 @@
 
 <div class="gate" id="gate" hidden>This page needs a link from your TV. On the TV, open FireDev → Phone microphone and scan the code.</div>
 
-<div class="note">Your words go to your FireDev service and appear on the TV. FireDev turns them into a fixed set of actions or a task for your coding agent. This page can never approve anything: approvals happen on the TV.</div>
+<div class="note">Your words go to your FireDev service and appear on the TV. FireDev turns them into a fixed set of actions or a task for your coding agent. The remote moves around FireDev on the TV only (not power, volume or other apps). Connecting this phone never approves anything: approving takes OK held for two seconds on the TV’s Approve button.</div>
 
 <script>
 (function () {
@@ -100,7 +129,7 @@
   if (!token) { $('gate').hidden = false; setConn('bad', 'Not paired'); return; }
   $('app').hidden = false;
 
-  var ws, focus = null, projects = {}, mode = 'direct', approvals = 0;
+  var ws, focus = null, projects = {}, mode = 'direct', approvals = 0, tvs = null, online = false;
   var CHIPS = ['Open my Android project', 'Why is the build failing?', 'Fix it and run the tests', 'Build the app', 'Show me what changed', 'Deploy the preview', 'What are you doing?', 'Stop'];
   CHIPS.forEach(function (c) {
     var b = document.createElement('button'); b.className = 'chip'; b.type = 'button'; b.textContent = c;
@@ -108,16 +137,23 @@
   });
 
   function setConn(cls, text) { $('conn').innerHTML = '<span class="dot ' + cls + '"></span><span>' + text + '</span>'; }
+  function showConn() {
+    if (!online) return setConn('warn', 'Reconnecting');
+    if (tvs === 0) return setConn('warn', 'TV not connected');
+    setConn('ok', 'Connected to TV');
+  }
 
   function connect() {
     var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(proto + '//' + location.host + BASE + '/ws?token=' + encodeURIComponent(token));
-    ws.onopen = function () { setConn('ok', 'Connected'); };
-    ws.onclose = function () { setConn('warn', 'Reconnecting'); setTimeout(connect, 1500); };
+    ws.onopen = function () { online = true; showConn(); };
+    ws.onclose = function () { online = false; showConn(); keysUp(); setTimeout(connect, 1500); };
     ws.onmessage = function (e) {
       var msg = JSON.parse(e.data);
       if (msg.type === 'pairing') { ws.onclose = null; ws.close(); try { localStorage.removeItem(KEY); } catch (x) {} $('app').hidden = true; $('gate').hidden = false; setConn('bad', 'Link expired'); return; }
-      if (msg.type === 'hello') { projects = msg.projects || {}; focus = msg.focus; approvals = (msg.approvals || []).length; render(); return; }
+      if (msg.type === 'hello') { projects = msg.projects || {}; focus = msg.focus; approvals = (msg.approvals || []).length; if (msg.home && msg.home.tvs != null) tvs = msg.home.tvs; showConn(); render(); return; }
+      if (msg.type === 'tv_link') { tvs = msg.data.tvs; showConn(); return; }
+      if (msg.type === 'key_ack') { keyAck(msg); return; }
       if (msg.type === 'state') { projects[msg.project] = msg.data.snapshot; render(); return; }
       if (msg.type === 'approval_required') { approvals++; render(); }
       if (msg.type === 'approval_accepted' || msg.type === 'approval_rejected') { approvals = Math.max(0, approvals - 1); render(); }
@@ -224,6 +260,56 @@
     };
     $('mic').addEventListener('pointerdown', start); $('mic').addEventListener('pointerup', stop); $('mic').addEventListener('pointerleave', stop); $('mic').addEventListener('pointercancel', stop);
   }
+  // --- remote ----------------------------------------------------------------------------------------------
+  // Each tap goes straight to the TV over this page's paired connection; the TV treats it like its own remote.
+  // Arrows repeat while held. OK sends press and release, so holding it works for approvals (two seconds on Approve).
+  var keySeq = 0, repeatT = null, holdKey = null, okHeld = false;
+  function sendKey(key, down) {
+    if (!ws || ws.readyState !== 1) { remoteHint('Not connected yet', 'bad'); return false; }
+    ws.send(JSON.stringify({ op: 'key', id: ++keySeq, key: key, down: down }));
+    return true;
+  }
+  function remoteHint(text, cls) { $('rhint').textContent = text; $('rhint').className = 'remote-hint' + (cls ? ' ' + cls : ''); }
+  function keyAck(msg) {
+    if (!msg.ok) return remoteHint(msg.error || 'The TV didn’t take that', 'bad');
+    if (msg.tvs != null && msg.tvs !== tvs) { tvs = msg.tvs; showConn(); }
+    if (tvs === 0) remoteHint('Sent, but no TV is connected', 'warn');
+    else if (!okHeld) remoteHint(approvals ? 'Approval on screen: Reject is first. Hold OK on Approve to approve.' : 'Moves around FireDev on the TV');
+  }
+  function keysUp() {
+    clearInterval(repeatT); clearTimeout(repeatT); repeatT = null;
+    if (okHeld) { okHeld = false; sendKey('select', false); }
+    Array.prototype.forEach.call(document.querySelectorAll('#remote .press, #remote .holding'), function (b) { b.classList.remove('press', 'holding'); });
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('#remote [data-key]'), function (b) {
+    var key = b.dataset.key;
+    b.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+    b.addEventListener('pointerdown', function (e) {
+      e.preventDefault();
+      if (b.setPointerCapture) try { b.setPointerCapture(e.pointerId); } catch (x) {}
+      if (!sendKey(key, true)) return;
+      b.classList.add('press');
+      if (navigator.vibrate) navigator.vibrate(12);
+      if (key === 'select') {
+        okHeld = true;
+        if (approvals) { b.classList.add('holding'); remoteHint('Keep holding to approve…', 'warn'); }
+      } else if (key !== 'back') {
+        holdKey = key;
+        repeatT = setTimeout(function () { repeatT = setInterval(function () { sendKey(holdKey, true); }, 160); }, 420);
+      }
+    });
+    var up = function () {
+      if (!b.classList.contains('press')) return;
+      b.classList.remove('press', 'holding');
+      if (key === 'select') { if (okHeld) { okHeld = false; sendKey('select', false); } }
+      else { clearInterval(repeatT); clearTimeout(repeatT); repeatT = null; }
+    };
+    b.addEventListener('pointerup', up); b.addEventListener('pointercancel', up); b.addEventListener('lostpointercapture', up);
+  });
+  // Leaving the page lets go of anything held; the server also releases a held OK if this phone disconnects.
+  document.addEventListener('visibilitychange', function () { if (document.hidden) keysUp(); });
+  window.addEventListener('pagehide', keysUp);
+
   connect();
 })();
 </script>

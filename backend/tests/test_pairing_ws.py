@@ -102,3 +102,44 @@ def test_the_tv_knows_when_a_phone_microphone_is_connected(setup):
             assert ev["type"] == "voice_link" and ev["data"]["links"] == ["Phone microphone"]
         ev = tv.receive_json()
         assert ev["type"] == "voice_link" and ev["data"]["links"] == []
+
+
+def _next(ws, type_):
+    """The next message of one type (the phone and TV also get each other's link events and the keys' broadcast)."""
+    while True:
+        msg = ws.receive_json()
+        if msg["type"] == type_:
+            return msg
+
+
+def test_the_phone_remote_sends_keys_to_the_tv_and_lets_go_when_it_drops(setup):
+    client, devices, _ = setup
+    tv_token, _ = devices.create("Sony TV", "tv")
+    phone_token, _ = devices.create("Phone microphone", "voice")
+    with client.websocket_connect("/ws?token=" + tv_token) as tv:
+        assert tv.receive_json()["home"]["tvs"] == 1
+        with client.websocket_connect("/ws?token=" + phone_token) as phone:
+            assert phone.receive_json()["home"]["tvs"] == 1
+            phone.send_json({"op": "key", "id": 1, "key": "down"})
+            assert _next(phone, "key_ack") == {"type": "key_ack", "id": 1, "ok": True, "tvs": 1}
+            ev = _next(tv, "remote_key")
+            assert ev["data"] == {"action": "down", "down": True, "source": "phone"}
+            phone.send_json({"op": "key", "id": 2, "key": "power"})
+            assert _next(phone, "key_ack")["ok"] is False  # only FireDev's own navigation keys
+            phone.send_json({"op": "key", "id": 3, "key": "select", "down": True})
+            assert _next(phone, "key_ack")["ok"] is True
+            ev = _next(tv, "remote_key")
+            assert ev["data"] == {"action": "select", "down": True, "source": "phone"}
+        # The phone dropped mid-hold: the TV is told to let go, so a held Approve can't complete without it.
+        ev = _next(tv, "remote_key")
+        assert ev["data"] == {"action": "select", "down": False, "source": "phone"}
+        assert _next(tv, "voice_link")["data"]["links"] == []
+
+
+def test_only_a_phone_sends_remote_keys(setup):
+    client, devices, _ = setup
+    tv_token, _ = devices.create("Sony TV", "tv")
+    with client.websocket_connect("/ws?token=" + tv_token) as tv:
+        tv.receive_json()
+        tv.send_json({"op": "key", "id": 1, "key": "select"})
+        assert tv.receive_json() == {"type": "key_ack", "id": 1, "ok": False, "error": "Only a paired phone can send remote keys"}

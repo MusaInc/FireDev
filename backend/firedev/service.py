@@ -24,6 +24,9 @@ from .session import HEARD, ProjectSession, Task, _rid
 log = logging.getLogger("firedev.service")
 
 
+REMOTE_KEYS = {"up", "down", "left", "right", "select", "back"}
+
+
 class CommandError(Exception):
     pass
 
@@ -83,6 +86,8 @@ class FireDev:
         self.focus_project: str | None = None
         self.agents: list[dict] = []
         self.voice_links: dict[str, str] = {}  # connected phone microphones: client id -> device name
+        self.tv_links: set[str] = set()  # connected TV interfaces (the phone remote shows whether a TV is listening)
+        self._held: set[str] = set()  # phone links holding the remote's centre button down
         self.agents_updated = 0.0
         self._agents_task: asyncio.Task | None = None
 
@@ -107,7 +112,7 @@ class FireDev:
 
     def home(self) -> dict:
         return {"projects": [s.summary() for s in self.sessions.values()], "approvals": len(self.approvals),
-                "voice_links": sorted(self.voice_links.values())}
+                "voice_links": sorted(self.voice_links.values()), "tvs": len(self.tv_links)}
 
     def voice_link(self, client_id: str, name: str | None) -> None:
         """A phone microphone page connected (name) or left (None): the TV's home shows that you can just talk."""
@@ -116,6 +121,35 @@ class FireDev:
         else:
             self.voice_links.pop(client_id, None)
         self.bus.emit("voice_link", None, None, links=sorted(self.voice_links.values()))
+
+    def tv_link(self, link: str, connected: bool) -> None:
+        """A TV interface connected or left: the phone remote shows whether anything is listening to its keys."""
+        (self.tv_links.add if connected else self.tv_links.discard)(link)
+        self.bus.emit("tv_link", None, None, tvs=len(self.tv_links))
+
+    def remote_key(self, link: str, client: Client, action: str, down: bool) -> int:
+        """A key from the phone remote: the TV handles it exactly like its own remote (focus, Back, approvals).
+
+        The phone never approves by itself. The TV only approves when the key lands on a focused Approve button, and a
+        phone's Select there has to be held for two seconds at every level; a dropped phone releases its key."""
+        if client.role not in ("voice", "admin"):
+            raise CommandError("Only a paired phone can send remote keys")
+        if action not in REMOTE_KEYS:
+            raise CommandError(f"Unknown remote key {action}")
+        if action == "select":
+            if down == (link in self._held):
+                return len(self.tv_links)  # a repeated press or a stray release
+            (self._held.add if down else self._held.discard)(link)
+        elif not down:
+            return len(self.tv_links)
+        self.bus.emit("remote_key", None, None, action=action, down=down, source="phone")
+        return len(self.tv_links)
+
+    def release_keys(self, link: str) -> None:
+        """The phone went away: let go of anything it was holding, so a hold can't complete without it."""
+        if link in self._held:
+            self._held.discard(link)
+            self.bus.emit("remote_key", None, None, action="select", down=False, source="phone")
 
     def session(self, pid: str | None) -> ProjectSession:
         pid = pid or self.focus_project

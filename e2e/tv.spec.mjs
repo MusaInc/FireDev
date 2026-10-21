@@ -401,7 +401,7 @@ test('nobody touches the remote: what you say on the phone moves the TV to the r
   await phone.goto('/voice#t=' + encodeURIComponent(tokens().voice));
   await expect(phone.locator('#conn')).toContainText('Connected');
   // Home knows the phone is listening and says so.
-  await expect(tv.locator('.home-status')).toContainText('Phone microphone');
+  await expect(tv.locator('.home-status')).toContainText('Phone connected');
   await expect(tv.locator('.home-sub')).toContainText('Talk on your phone');
   const say = async (text) => { await phone.fill('#text', text); await phone.click('button.send'); };
   await say('Show my projects');
@@ -415,7 +415,52 @@ test('nobody touches the remote: what you say on the phone moves the TV to the r
   await say('Go home');
   await expect.poll(() => route(tv)).toBe('home');
   await phone.close();
-  await expect(tv.locator('.home-status')).not.toContainText('Phone microphone');
+  await expect(tv.locator('.home-status')).not.toContainText('Phone connected');
+  await tv.close();
+});
+
+test('the phone remote moves around the TV; on an approval a tap never approves, only OK held on Approve', async ({ browser, request }) => {
+  const tv = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+  await open(tv);
+  await toWorkspace(tv);
+  await idle(tv);
+  const phone = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true });
+  await phone.goto('/voice#t=' + encodeURIComponent(tokens().voice));
+  await expect(phone.locator('#conn')).toContainText('Connected to TV');
+  // Microphone and remote on the same page.
+  await expect(phone.locator('#mic')).toBeVisible();
+  await expect(phone.locator('#remote [data-key="select"]')).toBeVisible();
+  const tap = async (key) => {
+    const b = phone.locator(`#remote [data-key="${key}"]`);
+    await b.dispatchEvent('pointerdown', { pointerId: 1 });
+    await phone.waitForTimeout(60);
+    await b.dispatchEvent('pointerup', { pointerId: 1 });
+    await phone.waitForTimeout(250);
+  };
+  // Connecting the phone sent nothing; the approval waits with Reject focused.
+  await api(request, 'run_action', { project: PID, action: 'deploy_preview' }, tokens().tv);
+  await expect(tv.locator('.approval')).toBeVisible();
+  await expect(phone.locator('#approval')).toBeVisible();
+  expect(await focused(tv)).toBe('reject');
+  await tap('right');
+  expect(await focused(tv)).toBe('approve');
+  await tap('back'); // Back never dismisses an approval
+  await expect(tv.locator('.approval')).toBeVisible();
+  await tap('select'); // a tap on Approve does not approve
+  await phone.waitForTimeout(600);
+  await expect(tv.locator('.approval')).toBeVisible();
+  expect((await snap(tv)).approvals.length).toBe(1);
+  // Held for two seconds, it does.
+  const ok = phone.locator('#remote [data-key="select"]');
+  await ok.dispatchEvent('pointerdown', { pointerId: 2 });
+  await expect(ok).toHaveClass(/holding/);
+  await phone.waitForTimeout(2400);
+  await ok.dispatchEvent('pointerup', { pointerId: 2 });
+  await expect(tv.locator('.approval')).toHaveCount(0);
+  await expect(tv.locator('.result')).toContainText('Deployment complete', { timeout: 30000 });
+  await tap('select'); // closes the result like the TV's own OK
+  await expect(tv.locator('.result')).toHaveCount(0);
+  await phone.close();
   await tv.close();
 });
 

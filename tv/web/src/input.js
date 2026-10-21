@@ -7,6 +7,8 @@
  *
  * Select reports both press and release (for the held confirmation on level 3 approvals). Arrows auto-repeat
  * while held (throttled).
+ *
+ * The phone remote's keys arrive from the server and go through inject(); while one is handled, source() is 'phone'.
  */
 
 const MAP = {
@@ -24,6 +26,7 @@ export const ARROW_REPEAT_MS = 120;
 export function createInput(onAction) {
   let lastArrow = -Infinity;
   let selectDown = false;
+  let source = 'remote';
 
   function fire(action, down, repeat) {
     if (action === 'up' || action === 'down' || action === 'left' || action === 'right') {
@@ -55,5 +58,9 @@ export function createInput(onAction) {
   window.addEventListener('keydown', (e) => key(e, true));
   window.addEventListener('keyup', (e) => key(e, false));
   window.__fdKey = (action, down) => fire(action, down !== false, false);
-  return { press: (a) => { fire(a, true, false); if (a === 'select') fire(a, false, false); } };
+  return {
+    press: (a) => { fire(a, true, false); if (a === 'select') fire(a, false, false); },
+    inject: (a, down, from) => { source = from || 'remote'; try { fire(a, down, false); } finally { source = 'remote'; } },
+    source: () => source,
+  };
 }

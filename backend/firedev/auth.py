@@ -2,7 +2,8 @@
 
 Roles
   tv         the Fire TV app: everything, including approvals
-  voice      a phone used as the microphone: voice commands and rejecting, never approving
+  voice      a phone used as the microphone and remote: voice commands, rejecting, and D-pad keys the TV handles like its
+             own remote (it never approves by itself; Approve on the TV needs a phone's OK held for two seconds)
   assistant  Alexa / MCP clients: commands and status; approving only if the server allows it (level 2 at most)
   admin      the local CLI (token in ~/.config/firedev/admin.token)
 """

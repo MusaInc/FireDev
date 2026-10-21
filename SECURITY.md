@@ -21,7 +21,7 @@ anything, but nothing risky happens until a person approves it on the TV with th
    | Role | Gets it how | Can |
    |---|---|---|
    | `tv` | 6-digit pairing code confirmed with `firedev pair` on the service machine | everything, including approving |
-   | `voice` | QR link created by a paired TV, valid 12 hours | voice commands, status, reject, stop. **Never approve** |
+   | `voice` | QR link created by a paired TV, valid 12 hours | voice commands, status, reject, stop, and remote keys (Up/Down/Left/Right/OK/Back) the TV handles like its own remote. **Never approves by itself**: the TV approves only when the phone's OK is held for two seconds on a focused Approve button, at every level; a phone that disconnects mid-hold is released |
    | `assistant` | `firedev add-assistant` (MCP), or an Alexa account linked on the TV | commands and status; approve only if `server.remote_approval: level2`, and never level 3 |
    | `admin` | `~/.config/firedev/admin.token` (mode 600) | pairing, devices, reset. **Not approving**: an agent running on the same box might read the file |
 

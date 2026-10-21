@@ -91,7 +91,7 @@ export class HomeScreen {
       h('span.clip', null, p.name + ' · ' + (p.task || 'working'))), 'work-' + p.id, { select: () => app.openProject(p.id) })));
     const online = app.status === 'online';
     clear(this.status).append(
-      phones.length ? h('span.home-pill', null, svg(icons.phone), 'Phone microphone') : null,
+      phones.length ? h('span.home-pill', null, svg(icons.phone), 'Phone connected') : null,
       h('span.home-pill', null, h('span.dot' + (online ? '.ok' : '.warn')), online ? (conn ? conn.name : 'Connected') : 'Reconnecting…'));
   }
 

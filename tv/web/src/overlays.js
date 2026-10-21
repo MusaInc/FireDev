@@ -127,11 +127,15 @@ export class Overlays {
 
   holdKey(action, down) {
     const a = this.approval;
-    if (!a || a.level < 3 || action !== 'select') return false;
+    if (!a || action !== 'select') return false;
+    // OK from the phone remote approves only when held, at every level: a tap or a dropped phone never approves.
+    const phone = this.app.input && this.app.input.source() === 'phone';
+    if (a.level < 3 && !phone && !this.holding) return false;
     if (this.app.focus.focusedId() !== 'approve') return false;
     const btn = this.approvalEl.querySelector('[data-focus-id="approve"]');
     if (down) {
       if (this.holding) return true;
+      if (phone && a.level < 3) this.app.toast('Keep holding OK on your phone to approve', 'warn');
       btn.classList.add('holding');
       this.holding = setTimeout(() => {
         this.holding = null;
@@ -415,7 +419,7 @@ export class Overlays {
       h('div', { style: 'display:flex;gap:48px;margin-top:40px;align-items:center' },
         h('div.qr', null, img),
         h('div', { style: 'flex:1;min-width:0' },
-          h('div.t-body.muted', null, 'Scan with your phone’s camera. Hold the button on the page and speak; your words appear here. The link works for 12 hours and can’t approve anything.'),
+          h('div.t-body.muted', null, 'Scan with your phone’s camera. Hold the button on the page and speak, or use its remote to move around. The link works for 12 hours and never approves by itself: approving from the phone takes OK held on Approve.'),
           url)),
       h('div', { style: 'margin-top:40px' }, focusable(h('button.btn', null, 'Done'), 'close', { select: () => this.close('phone') }))));
     this.open('phone', el, { initial: 'close' });

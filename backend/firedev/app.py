@@ -290,13 +290,22 @@ def create_app(config: Config, devices: DeviceStore) -> FastAPI:
                 devices.drop_pairing(claim)
 
     async def _session(websocket: WebSocket, client: Client):
+        link = f"{client.id}:{id(websocket)}"
+        if client.role == "tv":
+            service.tv_link(link, True)  # before subscribing: phones hear it, this TV gets the count in hello
         q = service.bus.subscribe()
-        await websocket.send_json({
-            "type": "hello", "client": {"id": client.id, "name": client.name, "role": client.role},
-            "home": service.home(), "projects": {pid: s.snapshot() for pid, s in service.sessions.items()},
-            "approvals": service.pending_approvals(), "focus": service.focus_project, "ui": service.ui_snapshot(),
-            "previews": service.previews.snapshot(),
-        })
+        try:
+            await websocket.send_json({
+                "type": "hello", "client": {"id": client.id, "name": client.name, "role": client.role},
+                "home": service.home(), "projects": {pid: s.snapshot() for pid, s in service.sessions.items()},
+                "approvals": service.pending_approvals(), "focus": service.focus_project, "ui": service.ui_snapshot(),
+                "previews": service.previews.snapshot(),
+            })
+        except BaseException:
+            service.bus.unsubscribe(q)
+            if client.role == "tv":
+                service.tv_link(link, False)
+            raise
 
         async def pump():
             while True:
@@ -304,7 +313,6 @@ def create_app(config: Config, devices: DeviceStore) -> FastAPI:
                 await websocket.send_text(json.dumps(ev.to_dict(), default=str))
 
         sender = asyncio.create_task(pump())
-        link = f"{client.id}:{id(websocket)}"
         if client.role == "voice":
             service.voice_link(link, client.name)
         try:
@@ -327,6 +335,13 @@ def create_app(config: Config, devices: DeviceStore) -> FastAPI:
                                                                          "args": {"text": msg.get("text", ""), "source": msg.get("source", client.role), "project": msg.get("project"),
                                                                                   "rec_ms": msg.get("rec_ms"),
                                                                                   "ui": msg.get("ui") if isinstance(msg.get("ui"), dict) else None}}))
+                elif op == "key":
+                    # The phone remote: answered at once, so the phone can show the press landed (and whether a TV is there).
+                    try:
+                        tvs = service.remote_key(link, client, str(msg.get("key", "")), msg.get("down", True) is not False)
+                        await websocket.send_json({"type": "key_ack", "id": msg.get("id"), "ok": True, "tvs": tvs})
+                    except CommandError as e:
+                        await websocket.send_json({"type": "key_ack", "id": msg.get("id"), "ok": False, "error": str(e)})
                 elif op == "ping":
                     await websocket.send_json({"type": "pong"})
         except (WebSocketDisconnect, RuntimeError):
@@ -334,8 +349,11 @@ def create_app(config: Config, devices: DeviceStore) -> FastAPI:
         finally:
             sender.cancel()
             service.bus.unsubscribe(q)
+            service.release_keys(link)
             if client.role == "voice":
                 service.voice_link(link, None)
+            elif client.role == "tv":
+                service.tv_link(link, False)
 
     async def _reply(websocket: WebSocket, client: Client, msg: dict):
         try:

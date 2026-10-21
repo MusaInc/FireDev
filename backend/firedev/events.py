@@ -25,7 +25,7 @@ EVENT_TYPES = {
     "task_queued", "task_started", "task_completed", "task_failed", "task_cancelled",
     "changes_undone", "state", "notice",
     "ui_surface", "ui_patch", "ui_data", "agent_speech",
-    "preview_state", "preview_offer", "preview_reload", "preview_control", "voice_link", "code_change",
+    "preview_state", "preview_offer", "preview_reload", "preview_control", "voice_link", "tv_link", "remote_key", "code_change",
 }
 
 _ids = itertools.count(1)
