@@ -31,9 +31,9 @@ how you give instructions.
 | Risk levels 0–3, approvals on the TV, held confirmation for level 3 | **Working**, tested with remote keys |
 | Agent requests outside its sandbox (`firedev run`, `firedev request`) gated by the TV | **Working**, tested |
 | Diff review, raw terminal output, undo of the agent's last change | **Working**, tested |
-| Live preview: the project's real running web app on the TV beside the agent or full screen; desktop, tablet and mobile widths, zoom, remote navigation inside the page, voice control; dev servers detected (Vite, Next.js, Expo web, static…) or started in tmux; preview gateway over SSH with hot reload, own origin, one-time tickets | **Working** in the browser and over real SSH: 41 unit/SSH tests (incl. an SSH drop and a FireDev restart), 7 browser tests driven by remote keys and voice. **Not yet on a physical TV** |
+| Live preview: the project's real running web app on the TV beside the agent or full screen; desktop, tablet and mobile widths, zoom, remote navigation inside the page, voice control; dev servers detected (Vite, Next.js, Expo web, static…) or started in tmux; preview gateway over SSH with hot reload, own origin, one-time tickets | **Working** in the browser and over real SSH: 41 unit/SSH tests (incl. an SSH drop and a FireDev restart), 7 browser tests driven by remote keys and voice, and on a real Fire TV |
 | Native apps in the preview | Reported honestly (no web preview); offers the build, screenshot images in the repository, or a web target |
-| Fire TV app (Kotlin WebView shell + TV interface), D-pad only | **Working** in the browser at 1080p (14 browser tests, incl. a 960×540 TV-viewport fit check) and when loaded the way the APK loads it (`tools/shell-sim.mjs`); APK builds. **Not yet run on a physical Fire TV** (pending) |
+| Fire TV app (Kotlin WebView shell + TV interface), D-pad only | **Working** in the browser at 1080p (14 browser tests, incl. a 960×540 TV-viewport fit check) and when loaded the way the APK loads it (`tools/shell-sim.mjs`); APK builds and runs on a real Fire TV (sideloaded) |
 | Phone microphone (`/voice`): live transcript on the TV, typed fallback | **Working** (tested in a phone-sized browser and with streamed partial transcripts). Browser speech recognition needs HTTPS; not yet tried on a real phone |
 | Pairing a TV with a 6-digit code | **Working**, tested |
 | MCP server (`/mcp`, `firedev mcp` stdio) | **Working**: unit-tested, and the stdio bridge was exercised against the running service |
@@ -51,7 +51,7 @@ service, relay or DNS to set up, and nobody but you hosts anything.
 **On your computer** (where your code, Codex and Claude Code live):
 
 ```bash
-git clone <this repo> ~/firedev && cd ~/firedev
+git clone https://github.com/MusaInc/FireDev ~/firedev && cd ~/firedev
 tools/setup.sh && tools/install-cli.sh      # venv, TV bundle, `firedev` on PATH, and `firedev init`
 firedev add ~/code/my-app                   # each project you want on the TV (--agent codex|claude|shell)
 firedev serve                               # or `firedev up` to run it in the background
@@ -92,7 +92,7 @@ The quick start above is the normal setup. This one is for a FireDev service on 
 others over SSH (and for the hosted demo deployment).
 
 ```bash
-git clone <this repo> firedev && cd firedev
+git clone https://github.com/MusaInc/FireDev firedev && cd firedev
 tools/setup.sh                 # venv, TV bundle, ~/.config/firedev/firedev.yaml
 tools/install-cli.sh           # puts `firedev` on PATH (/usr/local/bin symlink)
 ```
