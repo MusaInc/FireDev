@@ -2,6 +2,10 @@
 
 **FireDev turns Fire TV into a voice-first development workstation, letting developers control AI coding agents running on remote machines through SSH.**
 
+**[⬇ Download the Fire TV app (APK)](https://github.com/MusaInc/FireDev/releases/latest/download/FireDev.apk)** · [All releases](https://github.com/MusaInc/FireDev/releases) · [Demo video](https://musastudios.co.uk/builds/devpost/FireDev-demo-2m58.mp4)
+
+Install on a Fire TV with developer options on: `adb install -r FireDev.apk`, then follow the [quick start](#quick-start-your-tv-your-computer-nothing-hosted) on your computer.
+
 Pick a project with the remote. Say *"Why is the build failing?"*. Codex investigates on your own machine
 while the TV shows what it is doing, in type you can read from the sofa. Say *"Fix it and run the tests"* and
 watch the edits, the test count and the build. Say *"Deploy the preview"* and FireDev stops: it shows the
